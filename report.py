@@ -33,6 +33,8 @@ import sqlite3, math, sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+import matplotlib.pyplot as plt
+
 # ───────────────────────────────── CONFIG ────────────────────────────────── #
 DATABASES       = ["single.db", "double.db", "triple.db"]  # list of DB files to analyse
 DEFAULT_TIMEOUT = 600  # seconds for NULL repair_time fallback
@@ -268,6 +270,104 @@ def _print_ratio(buckets: Dict[str, List[float]]):
         mu, sd = _stats(vals)
         print(f"{alg:<8} {mu:10.4f} {sd:10.4f} {len(vals):6d}")
 
+def _cumulative_success_curve(iterations: List[int], fixed_flags: List[int]) -> Tuple[List[int], List[float]]:
+    """
+    Given per-case iteration counts and fixed flags, compute cumulative success rate
+    as a function of an iteration budget T. For each integer T from 0..max(iter),
+    we compute success_rate(T) = (#fixed with iterations <= T) / N_total,
+    where N_total is the total number of RPNI/BETAMAX cases in that dataset.
+    """
+    if not iterations:
+        return [], []
+    max_iter = max(iterations)
+    xs: List[int] = list(range(0, max_iter + 1))
+    ys: List[float] = []
+    n_total = len(iterations)
+    for T in xs:
+        succ = 0
+        for it, fixed in zip(iterations, fixed_flags):
+            if it is None:
+                continue
+            if it <= T and fixed:
+                succ += 1
+        ys.append((succ / n_total) if n_total > 0 else 0.0)
+    return xs, ys
+
+def plot_rpni_success_vs_iterations():
+    """
+    Plot RPNI/BETAMAX success rate as a function of iteration budget.
+
+    - Treats algorithms named 'rpni' or 'betamax' as the same family.
+    - Produces one PNG per DB in DATABASES.
+    - Also produces a combined 'rpni_success_all.png' across all DBs.
+    """
+    alg_names = ("rpni", "betamax")
+    overall_iters: List[int] = []
+    overall_fixed: List[int] = []
+
+    for db in DATABASES:
+        if not Path(db).is_file():
+            print(f"[WARN] Skipping missing DB {db} for RPNI plot", file=sys.stderr)
+            continue
+
+        conn = sqlite3.connect(db)
+        rows = _q(conn,
+                  "SELECT iterations, fixed FROM results "
+                  "WHERE algorithm IN (?, ?)",
+                  alg_names)
+        conn.close()
+
+        if not rows:
+            print(f"[INFO] No BETAMAX rows in {db}", file=sys.stderr)
+            continue
+
+        iters: List[int] = []
+        fixed_flags: List[int] = []
+        for it, fixed in rows:
+            # iterations can be NULL; treat as 0
+            iters.append(int(it) if it is not None else 0)
+            fixed_flags.append(int(fixed) if fixed is not None else 0)
+
+        overall_iters.extend(iters)
+        overall_fixed.extend(fixed_flags)
+
+        xs, ys = _cumulative_success_curve(iters, fixed_flags)
+        if not xs:
+            print(f"[WARN] No iteration data for BETAMAX in {db}", file=sys.stderr)
+            continue
+
+        plt.figure()
+        plt.plot(xs, ys, marker="o")
+        plt.xlabel("Iteration budget (T)")
+        plt.ylabel("Cumulative success rate (fixed with iterations ≤ T)")
+        plt.ylim(0.0, 1.05)
+        plt.grid(True, linestyle="--", alpha=0.3)
+        label_map = {
+            "single.db": "1-mutation",
+            "double.db": "2-mutations",
+            "triple.db": "3-mutations",
+        }
+        label = label_map.get(db, db)
+        plt.title(f"BETAMAX success vs iterations ({label})")
+        out_path = f"rpni_success_{db}.png"
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"[INFO] Saved BETAMAX success plot for {db} -> {out_path}")
+    # Combined across all DBs
+    xs_all, ys_all = _cumulative_success_curve(overall_iters, overall_fixed)
+    if xs_all:
+        plt.figure()
+        plt.plot(xs_all, ys_all, marker="o")
+        plt.xlabel("Iteration budget (T)")
+        plt.ylabel("Cumulative success rate (fixed with iterations ≤ T)")
+        plt.ylim(0.0, 1.05)
+        plt.grid(True, linestyle="--", alpha=0.3)
+        plt.title("BETAMAX success vs iterations (all-mutations)")
+        out_path = "rpni_success_all.png"
+        plt.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"[INFO] Saved combined BETAMAX success plot -> {out_path}")
+
 # ─────────────────────────────────────────────────────────────────────────── #
 
 if __name__ == "__main__":
@@ -283,3 +383,4 @@ if __name__ == "__main__":
     table_7_perfect()
     print("———— Table 8 (efficiency) ———————————")
     table_8_efficiency()
+    plot_rpni_success_vs_iterations()

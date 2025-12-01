@@ -78,7 +78,7 @@ project/build/
 *~
 *.swp
 *.swo
-
+*.txt
 # SQLite databases and related generated data
 *.db
 

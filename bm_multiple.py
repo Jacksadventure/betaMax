@@ -16,7 +16,7 @@ REPAIR_OUTPUT_DIR = "repair_results"  # Directory where repair outputs are store
 os.makedirs(REPAIR_OUTPUT_DIR, exist_ok=True)
 
 # Possible repair algorithms you want to test
-REPAIR_ALGORITHMS = ["erepair","lstar_ec"]
+REPAIR_ALGORITHMS = ["lstar_ec"]
 
 PROJECT_PATHS = {
     "dot": "project/erepair-subjects/dot/build/dot_parser",
@@ -602,7 +602,9 @@ def main():
     parser = argparse.ArgumentParser(description="Benchmark runner with resume support")
     parser.add_argument("--db", default=DATABASE_PATH, help="Path to results SQLite DB")
     parser.add_argument("--formats", nargs="+", choices=VALID_FORMATS, help="Formats to include (default: all)")
-    parser.add_argument("--mutations", nargs="+", default=MUTATION_TYPES, help="Mutation types to include")
+    parser.add_argument("--mutations", nargs="+", default=MUTATION_TYPES,
+                        help="Either mutation type names (e.g. 'double') or a numeric cap "
+                             "that limits how many samples per format to load.")
     parser.add_argument("--algorithms", nargs="+", choices=REPAIR_ALGORITHMS, help="Override algorithms to run")
     parser.add_argument("--resume-only", action="store_true", help="Skip sample insertion, only resume unfinished repairs")
     parser.add_argument("--resume", action="store_true", help="Alias of --resume-only (also skips precompute)")
@@ -611,6 +613,20 @@ def main():
     parser.add_argument("--limit", type=int, help="Limit number of entries to (re)process")
     parser.add_argument("--pause-on-exit", action="store_true", help="Pause for keypress before exiting")
     args = parser.parse_args()
+
+    # Allow "--mutations 20" style usage by separating numeric caps from
+    # actual mutation-type tokens.
+    sample_cap_override: int | None = None
+    normalized_mutation_types: list[str] = []
+    for token in args.mutations:
+        if token.isdigit():
+            sample_cap_override = int(token)
+        else:
+            normalized_mutation_types.append(token)
+    if not normalized_mutation_types:
+        normalized_mutation_types = MUTATION_TYPES.copy()
+    args.mutations = normalized_mutation_types
+    args.sample_cap = sample_cap_override
 
     # Apply runtime flags
     global QUIET, LIMIT_N, PAUSE_ON_EXIT
@@ -748,7 +764,7 @@ def main():
     if not (args.resume_only or args.resume):
         for mutation_type in args.mutations:
             for fmt in (args.formats if args.formats else VALID_FORMATS):
-                # Construct DB path, e.g., mutated_files/single_dot.db
+                # Construct DB path, e.g., mutated_files/double_dot.db
                 db_name = f"{mutation_type}_{fmt}.db"
                 mutation_db_path = os.path.join("mutated_files", db_name)
 
@@ -758,16 +774,48 @@ def main():
 
                 print(f"[INFO] Loading samples from {mutation_db_path}")
                 samples = load_test_samples_from_db(mutation_db_path)
-                
-                # Use first TRAIN_K for learning grammar (L*), and next TEST_K as test set
-                # Restrict to at most TRAIN_K + TEST_K entries
-                limited = samples[:TRAIN_K + TEST_K] if samples else []
-                test_samples = limited[TRAIN_K:TRAIN_K + TEST_K]
+
+                total_samples = len(samples)
+                if not total_samples:
+                    print(f"[INFO] No samples found in '{mutation_db_path}'")
+                    continue
+
+                # Use first TRAIN_K for learning grammar (L*), and next TEST_K as test set.
+                # Respect an optional numeric cap (from \"--mutations 20\") if provided.
+                cap = args.sample_cap
+                if cap is not None:
+                    budget = min(cap, total_samples)
+                else:
+                    max_budget = TRAIN_K + TEST_K
+                    if max_budget <= 0 or total_samples <= max_budget:
+                        budget = total_samples
+                    else:
+                        budget = max_budget
+
+                limited = samples[:budget]
+                train_limit = min(TRAIN_K, len(limited)) if cap is None else min(TRAIN_K, len(limited))
+                remaining = len(limited) - train_limit
+
+                if remaining <= 0:
+                    train_limit = 0
+                    remaining = len(limited)
+
+                if cap is not None:
+                    test_limit = remaining
+                else:
+                    test_limit = min(TEST_K, remaining) if TEST_K > 0 else remaining
+                    if test_limit <= 0:
+                        test_limit = remaining
+
+                test_samples = limited[train_limit:train_limit + test_limit]
 
                 if test_samples:
                     # Insert each test sample into the 'results' table for each algorithm
                     format_key = f"{mutation_type}_{fmt}"
-                    print(f"[INFO] Inserting {len(test_samples)} test samples (TRAIN_K={TRAIN_K}, TEST_K={TEST_K}) for {format_key}")
+                    effective_train = train_limit
+                    effective_test = len(test_samples)
+                    print(f"[INFO] Inserting {effective_test} test samples "
+                          f"(train_used={effective_train}, test_used={effective_test}) for {format_key}")
                     insert_test_samples_to_db(db_path, format_key, test_samples)
                 else:
                     print(f"[INFO] No samples found in '{mutation_db_path}'")

@@ -1,1 +1,1 @@
-http://192.168.1.1/index.html/search?q=hello world/search?q=test
+http://192.168.1.1/index.html?q=hello%20world

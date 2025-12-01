@@ -1,1 +1,1 @@
-http://www.google.com/index.html/search?q=hello world/
+http://www.google.com/index.html?q=hello%20world

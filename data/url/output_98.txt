@@ -1,1 +1,1 @@
-https://amazon.com/search?q=hello world/index.html
+http://amazon.com/search?q=hello%20world

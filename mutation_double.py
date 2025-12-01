@@ -11,6 +11,8 @@ For each file:
 Only one (p1,p2) pair is stored per original file.
 """
 
+from __future__ import annotations
+
 import argparse
 import random
 import sqlite3
@@ -98,14 +100,21 @@ def find_single_fault(
     validator: str,
     path: Path,
     exclude: set[int],
-    max_attempts: int
+    max_attempts: int,
+    prefix_len: int | None = None,
 ) -> int | None:
     """Return a position whose single-byte mutation (replace/delete/insert) fails, else None."""
     tmp = path.with_suffix(".tmp_mut_single")
     tries = 0
     while tries < max_attempts:
         tries += 1
-        pos = random.randrange(len(data))
+        if prefix_len is not None and random.random() < 0.8:
+            upper = min(len(data), prefix_len)
+            if upper <= 0:
+                continue
+            pos = random.randrange(upper)
+        else:
+            pos = random.randrange(len(data))
         if pos in exclude or data[pos] == ord('"'):
             continue
 
@@ -139,16 +148,23 @@ def process_file(
         print(f"[skip] original already invalid: {path}")
         return
 
+    cur = conn.execute("SELECT 1 FROM mutations WHERE file_path=? LIMIT 1",
+                       (str(path),))
+    if cur.fetchone():
+        return
+
     print(f"[info] processing {path}")
 
+    focus_prefix = 7 if "url" in path.parts else None
+
     # ── Stage 1: find p1 ─────────────────────────────────────────
-    p1 = find_single_fault(data, validator, path, set(), max_attempts)
+    p1 = find_single_fault(data, validator, path, set(), max_attempts, focus_prefix)
     if p1 is None:
         print("  [✗] no single-byte fault (p1) found")
         return
 
     # ── Stage 2: find p2 ─────────────────────────────────────────
-    p2 = find_single_fault(data, validator, path, {p1}, max_attempts)
+    p2 = find_single_fault(data, validator, path, {p1}, max_attempts, focus_prefix)
     if p2 is None:
         print("  [✗] no second single-byte fault (p2) found")
         return

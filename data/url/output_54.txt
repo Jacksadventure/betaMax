@@ -1,1 +1,1 @@
-http://google.com/search?q=hello world/search?q=test
+http://google.com/search?q=hello%20world
