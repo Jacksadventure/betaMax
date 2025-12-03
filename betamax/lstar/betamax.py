@@ -532,7 +532,7 @@ def earley_correct(g: Grammar, start_sym: str, broken: str, symbols: List[str] =
 
     # Parse timeout (seconds), can be overridden via env LSTAR_PARSE_TIMEOUT
     try:
-        parse_timeout = float(os.getenv("LSTAR_PARSE_TIMEOUT", "40.0"))
+        parse_timeout = float(os.getenv("LSTAR_PARSE_TIMEOUT", "100.0"))
     except Exception:
         parse_timeout = 40.0
 

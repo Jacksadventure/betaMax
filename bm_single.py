@@ -357,7 +357,8 @@ def repair_and_update_entry(cursor, conn, row):
             filtered = [(r[0] or "") for r in rows if (r[0] or "") != (original_text or "")]
             with open(pos_file, "w", encoding="utf-8") as pf:
                 for s in filtered:
-                    pf.write(s + "\n")
+                    line = (s or "").rstrip("\n")
+                    pf.write(line + "\n")
             pos_count = len(filtered)
             if not QUIET:
                 print(f"[DEBUG] (ID={id_}) LOO positives: count={pos_count}, excluded_original={(original_text or '') not in filtered}")
@@ -381,7 +382,8 @@ def repair_and_update_entry(cursor, conn, row):
             rows = cur3.fetchall()
             with open(neg_file, "w", encoding="utf-8") as nf:
                 for r in rows:
-                    nf.write(((r[0] or "") + "\n"))
+                    line = (r[0] or "").rstrip("\n")
+                    nf.write(line + "\n")
             conn3.close()
         except Exception:
             # Ensure the negatives file exists even if empty
@@ -680,12 +682,14 @@ def main():
                     rows = curc.fetchall()
                     with open(pos_file, "w", encoding="utf-8") as pf:
                         for r in rows:
-                            pf.write(((r[0] or "") + "\n"))
+                            line = (r[0] or "").rstrip("\n")
+                            pf.write(line + "\n")
                     curc.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {pre_k}")
                     rows = curc.fetchall()
                     with open(neg_file, "w", encoding="utf-8") as nf:
                         for r in rows:
-                            nf.write(((r[0] or "") + "\n"))
+                            line = (r[0] or "").rstrip("\n")
+                            nf.write(line + "\n")
                     connc.close()
                     category = REGEX_DIR_TO_CATEGORY.get(fmt, fmt)
                     # Prefer validators/regex validator for precompute; allow override via LSTAR_ORACLE_VALIDATOR
@@ -747,12 +751,14 @@ def main():
                         rows = curc.fetchall()
                         with open(pos_file, "w", encoding="utf-8") as pf:
                             for r in rows:
-                                pf.write(((r[0] or "") + "\n"))
+                                line = (r[0] or "").rstrip("\n")
+                                pf.write(line + "\n")
                         curc.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {small_k}")
                         rows = curc.fetchall()
                         with open(neg_file, "w", encoding="utf-8") as nf:
                             for r in rows:
-                                nf.write(((r[0] or "") + "\n"))
+                                line = (r[0] or "").rstrip("\n")
+                                nf.write(line + "\n")
                         connc.close()
                         print(f"[DEBUG] Retry precompute cache for {format_key} with K={small_k}")
                         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=pre_tmo, env=env)

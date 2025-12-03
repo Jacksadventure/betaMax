@@ -49,7 +49,43 @@ REGEX_FORMATS = set(REGEX_DIR_TO_CATEGORY.keys())
 VALID_FORMATS = ["date", "time", "url", "isbn", "ipv4", "ipv6"]
 
 
-MUTATION_TYPES = ["triple"]  
+MUTATION_TYPES = ["triple"]
+
+_MUTATION_TABLE_CACHE: dict[str, str] = {}
+
+
+def get_mutation_table_name(mutation_db_path: str, conn: sqlite3.Connection | None = None) -> str:
+    """
+    Returns the name of the table that stores mutation samples.
+    Accepts either the standard 'mutations' or legacy 'mutations_triple' tables.
+    """
+    if mutation_db_path in _MUTATION_TABLE_CACHE:
+        return _MUTATION_TABLE_CACHE[mutation_db_path]
+
+    if not os.path.exists(mutation_db_path):
+        raise FileNotFoundError(f"Mutation database not found: {mutation_db_path}")
+
+    close_conn = False
+    target_conn = conn
+    if target_conn is None:
+        target_conn = sqlite3.connect(mutation_db_path)
+        close_conn = True
+
+    cursor = target_conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {row[0] for row in cursor.fetchall()}
+
+    if close_conn:
+        target_conn.close()
+
+    for candidate in ("mutations", "mutations_triple"):
+        if candidate in tables:
+            _MUTATION_TABLE_CACHE[mutation_db_path] = candidate
+            return candidate
+
+    raise sqlite3.OperationalError(
+        f"No table named 'mutations' or 'mutations_triple' in {mutation_db_path}"
+    )
 
 # Train/Test split counts (default 50/50). Override via env BM_TRAIN_K, BM_TEST_K.
 TRAIN_K = int(os.environ.get("BM_TRAIN_K", "50"))
@@ -117,8 +153,9 @@ def load_test_samples_from_db(mutation_db_path: str):
         return []
 
     conn = sqlite3.connect(mutation_db_path)
+    table_name = get_mutation_table_name(mutation_db_path, conn)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, original_text, mutated_text FROM mutations ORDER BY id")
+    cursor.execute(f"SELECT id, original_text, mutated_text FROM {table_name} ORDER BY id")
     samples = cursor.fetchall()
     conn.close()
 
@@ -349,15 +386,17 @@ def repair_and_update_entry(cursor, conn, row):
         try:
             mdb_path = os.path.join("mutated_files", f"{format_key}.db")
             conn2 = sqlite3.connect(mdb_path)
+            table_name = get_mutation_table_name(mdb_path, conn2)
             cur2 = conn2.cursor()
             # Take the first K originals by id as positives
-            cur2.execute(f"SELECT original_text FROM mutations ORDER BY id LIMIT {K}")
+            cur2.execute(f"SELECT original_text FROM {table_name} ORDER BY id LIMIT {K}")
             rows = cur2.fetchall()
             # Leave-One-Out: exclude this row's original_text from positives
             filtered = [(r[0] or "") for r in rows if (r[0] or "") != (original_text or "")]
             with open(pos_file, "w", encoding="utf-8") as pf:
                 for s in filtered:
-                    pf.write(s + "\n")
+                    line = (s or "").rstrip("\n")
+                    pf.write(line + "\n")
             pos_count = len(filtered)
             if not QUIET:
                 print(f"[DEBUG] (ID={id_}) LOO positives: count={pos_count}, excluded_original={(original_text or '') not in filtered}")
@@ -376,12 +415,14 @@ def repair_and_update_entry(cursor, conn, row):
         try:
             mdb_path = os.path.join("mutated_files", f"{format_key}.db")
             conn3 = sqlite3.connect(mdb_path)
+            table_name = get_mutation_table_name(mdb_path, conn3)
             cur3 = conn3.cursor()
-            cur3.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {K}")
+            cur3.execute(f"SELECT mutated_text FROM {table_name} ORDER BY id LIMIT {K}")
             rows = cur3.fetchall()
             with open(neg_file, "w", encoding="utf-8") as nf:
                 for r in rows:
-                    nf.write(((r[0] or "") + "\n"))
+                    line = (r[0] or "").rstrip("\n")
+                    nf.write(line + "\n")
             conn3.close()
         except Exception:
             # Ensure the negatives file exists even if empty
@@ -668,17 +709,20 @@ def main():
                     neg_file = f"temp_neg_cache_{format_key}_{random.randint(0,9999)}.txt"
                     pre_k = int(os.environ.get("LSTAR_PRECOMP_K", str(TRAIN_K)))
                     connc = sqlite3.connect(mutation_db_path)
+                    mutation_table = get_mutation_table_name(mutation_db_path, connc)
                     curc = connc.cursor()
-                    curc.execute(f"SELECT original_text FROM mutations ORDER BY id LIMIT {pre_k}")
+                    curc.execute(f"SELECT original_text FROM {mutation_table} ORDER BY id LIMIT {pre_k}")
                     rows = curc.fetchall()
                     with open(pos_file, "w", encoding="utf-8") as pf:
                         for r in rows:
-                            pf.write(((r[0] or "") + "\n"))
-                    curc.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {pre_k}")
+                            line = (r[0] or "").rstrip("\n")
+                            pf.write(line + "\n")
+                    curc.execute(f"SELECT mutated_text FROM {mutation_table} ORDER BY id LIMIT {pre_k}")
                     rows = curc.fetchall()
                     with open(neg_file, "w", encoding="utf-8") as nf:
                         for r in rows:
-                            nf.write(((r[0] or "") + "\n"))
+                            line = (r[0] or "").rstrip("\n")
+                            nf.write(line + "\n")
                     connc.close()
                     category = REGEX_DIR_TO_CATEGORY.get(fmt, fmt)
                     # Prefer validators/regex validator for precompute; allow override via LSTAR_ORACLE_VALIDATOR
@@ -729,17 +773,20 @@ def main():
                         small_k = int(os.environ.get("LSTAR_PRECOMP_K_FALLBACK", "10"))
                         # Rebuild pos/neg with smaller K
                         connc = sqlite3.connect(mutation_db_path)
+                        mutation_table = get_mutation_table_name(mutation_db_path, connc)
                         curc = connc.cursor()
-                        curc.execute(f"SELECT original_text FROM mutations ORDER BY id LIMIT {small_k}")
+                        curc.execute(f"SELECT original_text FROM {mutation_table} ORDER BY id LIMIT {small_k}")
                         rows = curc.fetchall()
                         with open(pos_file, "w", encoding="utf-8") as pf:
                             for r in rows:
-                                pf.write(((r[0] or "") + "\n"))
-                        curc.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {small_k}")
+                                line = (r[0] or "").rstrip("\n")
+                                pf.write(line + "\n")
+                        curc.execute(f"SELECT mutated_text FROM {mutation_table} ORDER BY id LIMIT {small_k}")
                         rows = curc.fetchall()
                         with open(neg_file, "w", encoding="utf-8") as nf:
                             for r in rows:
-                                nf.write(((r[0] or "") + "\n"))
+                                line = (r[0] or "").rstrip("\n")
+                                nf.write(line + "\n")
                         connc.close()
                         print(f"[DEBUG] Retry precompute cache for {format_key} with K={small_k}")
                         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=pre_tmo, env=env)
