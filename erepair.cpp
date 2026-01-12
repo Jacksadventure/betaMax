@@ -14,11 +14,13 @@
 #include <fcntl.h>     // for mkstemp
 #include <stdio.h>     // for mkstemp
 #include <sys/wait.h>  // for WIFEXITED, WEXITSTATUS
+#include <chrono>
 
 int interations = 0;
 int success = 0;
 int failure = 0;
 int incomplete = 0;
+double oracle_seconds_total = 0.0;
 //-------------------------------------
 // 0. CharacterSet
 //-------------------------------------
@@ -107,7 +109,10 @@ std::function<ParseResult(const std::string&)> createParser(const std::string& p
         // Call the external parser
         // parser_path + " " + temp_file + " > /dev/null 2>&1"
         std::string command = parser_path + " " + temp_file + " > /dev/null 2>&1";
+        auto t0 = std::chrono::steady_clock::now();
         int status = system(command.c_str());
+        auto t1 = std::chrono::steady_clock::now();
+        oracle_seconds_total += std::chrono::duration<double>(t1 - t0).count();
 
         ParseResult result = ParseResult::INCORRECT;
         if (WIFEXITED(status)) {
@@ -309,6 +314,7 @@ int main(int argc, char* argv[]) {
     } else {
         std::cout << "No valid repair found." << std::endl;
     }
+    printf("[METRICS] oracle_seconds_total=%.6f\n", oracle_seconds_total);
     printf("*** Number of required oracle runs: %lld correct: %lld incorrect: %lld \n", (long long)interations, (long long)success, (long long)failure);
     return 0;
 }

@@ -14,15 +14,11 @@ from bm_lstar_mutations import LStarMutationPool, get_mutation_table_name
 # ------------------------------------------------------------------------------
 # Configuration
 # ------------------------------------------------------------------------------
-DATABASE_PATH = "double.db"  # Default results database for double-mutation runs
+DATABASE_PATH = "double.db"  # Name of the new database to create
 REPAIR_OUTPUT_DIR = "repair_results"  # Directory where repair outputs are stored
 os.makedirs(REPAIR_OUTPUT_DIR, exist_ok=True)
 
-# Supported repair algorithms (CLI choices)
-ALL_ALGORITHMS = ["erepair", "earley", "betamax"]
-
-
-# Default repair algorithms to run (can be overridden via --algorithms)
+# Possible repair algorithms you want to test
 REPAIR_ALGORITHMS = ["betamax"]
 
 PROJECT_PATHS = {
@@ -53,7 +49,7 @@ REGEX_DIR_TO_CATEGORY = {
 REGEX_FORMATS = set(REGEX_DIR_TO_CATEGORY.keys())
 
 # Valid formats/folders to process
-VALID_FORMATS = ["date", "time", "isbn", "ipv4", "ipv6", "url"]
+VALID_FORMATS = ["date", "time", "url", "isbn", "ipv4", "ipv6"]
 
 
 MUTATION_TYPES = ["double"]
@@ -65,38 +61,11 @@ TEST_K = int(os.environ.get("BM_TEST_K", "50"))
 # Shared mutation pool manager
 LSTAR_MUTATION_POOL = LStarMutationPool(TRAIN_K, REGEX_FORMATS, REGEX_DIR_TO_CATEGORY)
 
-CACHE_ROOT = os.environ.get("LSTAR_CACHE_ROOT", "cache")
-os.makedirs(CACHE_ROOT, exist_ok=True)
-
-
-def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
-    """
-    Build the cache path for a given format/learner combo so grammars learned
-    with different algorithms do not overwrite each other.
-    """
-    learner_name = (learner or _runtime_betamax_learner()).replace("-", "_")
-    return os.path.join(CACHE_ROOT, f"lstar_{fmt}_{learner_name}.json")
-
-
-def _runtime_betamax_learner() -> str:
-    """Return learner name for runtime BETAMAX invocation."""
-    return os.environ.get("LSTAR_LEARNER",
-                          os.environ.get("BM_BETAMAX_LEARNER",
-                                         "rpni"))
-
-
-def _cache_betamax_learner() -> str:
-    """Return learner name for cache/precompute steps."""
-    return os.environ.get("LSTAR_CACHE_LEARNER",
-                          os.environ.get("LSTAR_LEARNER",
-                                         os.environ.get("BM_BETAMAX_LEARNER",
-                                                        "rpni")))
-
 # Parser timeout (in seconds)
-VALIDATION_TIMEOUT = 300
+VALIDATION_TIMEOUT = 30
 
 # Repair timeout (in seconds)
-REPAIR_TIMEOUT = 300
+REPAIR_TIMEOUT = 240
 
 # Verbosity and run-control
 QUIET = False          # suppress per-entry stdout/stderr and noisy logs
@@ -140,158 +109,9 @@ def create_database(db_path: str):
             distance_original_repaired INTEGER
         )
     """)
-    _ensure_results_schema(cursor)
     conn.commit()
     conn.close()
     print(f"[INFO] Created/checked table 'results' in database '{db_path}'.")
-
-def _ensure_results_schema(cursor: sqlite3.Cursor) -> None:
-    cursor.execute("PRAGMA table_info(results)")
-    existing = {row[1] for row in cursor.fetchall()}
-    additions = [
-        ("timed_out", "INTEGER DEFAULT 0"),
-        ("return_code", "INTEGER"),
-        ("ec_time", "REAL DEFAULT 0.0"),
-        ("ec_ratio", "REAL DEFAULT 0.0"),
-        ("learn_time", "REAL DEFAULT 0.0"),
-        ("learn_ratio", "REAL DEFAULT 0.0"),
-        ("oracle_time", "REAL DEFAULT 0.0"),
-        ("oracle_ratio", "REAL DEFAULT 0.0"),
-    ]
-    for name, decl in additions:
-        if name in existing:
-            continue
-        try:
-            cursor.execute(f"ALTER TABLE results ADD COLUMN {name} {decl}")
-        except Exception:
-            pass
-
-
-def _results_columns(cursor: sqlite3.Cursor) -> set[str]:
-    cursor.execute("PRAGMA table_info(results)")
-    return {row[1] for row in cursor.fetchall()}
-
-
-def _update_results_row(
-    cursor: sqlite3.Cursor,
-    conn: sqlite3.Connection,
-    *,
-    id_: int,
-    repaired_text: str,
-    fixed: int,
-    iterations: int,
-    repair_time: float,
-    correct_runs: int,
-    incorrect_runs: int,
-    incomplete_runs: int,
-    distance_original_broken: int,
-    distance_broken_repaired: int,
-    distance_original_repaired: int,
-    timed_out: int,
-    return_code: int,
-    ec_time: float,
-    ec_ratio: float,
-    learn_time: float,
-    learn_ratio: float,
-    oracle_time: float,
-    oracle_ratio: float,
-) -> None:
-    cols = _results_columns(cursor)
-    assignments = [
-        "repaired_text = ?",
-        "fixed = ?",
-        "iterations = ?",
-        "repair_time = ?",
-        "correct_runs = ?",
-        "incorrect_runs = ?",
-        "incomplete_runs = ?",
-        "distance_original_broken = ?",
-        "distance_broken_repaired = ?",
-        "distance_original_repaired = ?",
-    ]
-    params: list[object] = [
-        repaired_text,
-        fixed,
-        iterations,
-        repair_time,
-        correct_runs,
-        incorrect_runs,
-        incomplete_runs,
-        distance_original_broken,
-        distance_broken_repaired,
-        distance_original_repaired,
-    ]
-
-    optional = [
-        ("timed_out", timed_out),
-        ("return_code", return_code),
-        ("ec_time", ec_time),
-        ("ec_ratio", ec_ratio),
-        ("learn_time", learn_time),
-        ("learn_ratio", learn_ratio),
-        ("oracle_time", oracle_time),
-        ("oracle_ratio", oracle_ratio),
-    ]
-    for col, val in optional:
-        if col not in cols:
-            continue
-        assignments.append(f"{col} = ?")
-        params.append(val)
-
-    params.append(id_)
-    cursor.execute(
-        f"UPDATE results SET {', '.join(assignments)} WHERE id = ?",
-        params,
-    )
-    conn.commit()
-
-
-_RE_METRIC = re.compile(r"^\[METRICS\]\s+([a-zA-Z0-9_]+)=([0-9]*\.?[0-9]+)\s*$", re.MULTILINE)
-_RE_PROFILE_EC = re.compile(r"^\[PROFILE\]\s+ec_earley(?:\(relearn\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
-_RE_PROFILE_LEARN_TOTAL = re.compile(r"^\[PROFILE\]\s+learn_grammar\(total\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
-_RE_PROFILE_LEARN_RELEARN = re.compile(r"^\[PROFILE\]\s+learn_grammar\(relearn\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
-_RE_PROFILE_ORACLE = re.compile(r"^\[PROFILE\]\s+oracle_validate(?:\([^\)]*\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
-
-
-def _extract_betamax_metrics(stdout: str) -> tuple[float, float, float]:
-    kv: dict[str, float] = {}
-    for m in _RE_METRIC.finditer(stdout or ""):
-        try:
-            kv[m.group(1)] = float(m.group(2))
-        except Exception:
-            continue
-    if "ec_seconds_total" in kv or "learn_seconds_total" in kv or "oracle_seconds_total" in kv:
-        return (
-            float(kv.get("ec_seconds_total", 0.0)),
-            float(kv.get("learn_seconds_total", 0.0)),
-            float(kv.get("oracle_seconds_total", 0.0)),
-        )
-    ec_time = sum(float(m.group(1)) for m in _RE_PROFILE_EC.finditer(stdout or "") if m.group(1))
-    learn_time = 0.0
-    for m in _RE_PROFILE_LEARN_TOTAL.finditer(stdout or ""):
-        try:
-            learn_time += float(m.group(1))
-        except Exception:
-            pass
-    for m in _RE_PROFILE_LEARN_RELEARN.finditer(stdout or ""):
-        try:
-            learn_time += float(m.group(1))
-        except Exception:
-            pass
-    oracle_time = 0.0
-    for m in _RE_PROFILE_ORACLE.finditer(stdout or ""):
-        try:
-            oracle_time += float(m.group(1))
-        except Exception:
-            pass
-    return ec_time, learn_time, oracle_time
-
-def _ensure_text(val) -> str:
-    if val is None:
-        return ""
-    if isinstance(val, bytes):
-        return val.decode("utf-8", errors="replace")
-    return str(val)
 
 
 def load_test_samples_from_db(mutation_db_path: str):
@@ -352,7 +172,7 @@ def validate_with_external_tool(file_path: str, format_key: str, algorithm: str)
     Validate a repaired file using validators/regex validate_* if available,
     otherwise validators/validate_* (earley), or fallback to Python validators.
     - erepair: use match_partial.py Category
-    - betamax: prefer validators/validate_* (binary); fallback to validators/regex or match.py
+    - betamax: prefer validators/regex/validate_*
     - earley: prefer validators/validate_* (binary); fallback to validators/regex or match.py
     """
     base_format = format_key.split('_')[-1]
@@ -362,11 +182,8 @@ def validate_with_external_tool(file_path: str, format_key: str, algorithm: str)
             if algorithm == "erepair":
                 cmd = ["python3", "match_partial.py", category, file_path]
             elif algorithm == "betamax":
-                validator_bin = os.path.join("validators", f"validate_{base_format}")
                 wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-                if os.path.exists(validator_bin):
-                    cmd = [validator_bin, file_path]
-                elif os.path.exists(wrapper):
+                if os.path.exists(wrapper):
                     cmd = [wrapper, file_path]
                 else:
                     cmd = ["python3", "match.py", category, file_path]
@@ -407,8 +224,8 @@ def validate_with_external_tool(file_path: str, format_key: str, algorithm: str)
 
 def _normalize_for_distance(text: Optional[str]) -> str:
     """
-    Treat trailing newline/CR characters as insignificant when comparing strings.
-    This keeps benchmark distances aligned with human intuition for single-line inputs.
+    Disregard trailing newline/CR characters for edit-distance metrics so they
+    only reflect meaningful content changes.
     """
     if text is None:
         return ""
@@ -455,18 +272,6 @@ def extract_oracle_info(stdout: str):
     if match:
         return int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4))
     return 0, 0, 0, 0
-
-
-def extract_oracle_seconds_total(stdout: str) -> float:
-    last_val = 0.0
-    for m in _RE_METRIC.finditer(stdout or ""):
-        if m.group(1) != "oracle_seconds_total":
-            continue
-        try:
-            last_val = float(m.group(2))
-        except Exception:
-            continue
-    return last_val
 
 
 def extract_lstar_attempts(stdout: str) -> int:
@@ -527,14 +332,6 @@ def repair_and_update_entry(cursor, conn, row):
     fixed = 0
     iterations, correct_runs, incorrect_runs, incomplete_runs = 0, 0, 0, 0
     repair_time = 0.0
-    timed_out = 0
-    return_code = None
-    ec_time = 0.0
-    ec_ratio = 0.0
-    learn_time = 0.0
-    learn_ratio = 0.0
-    oracle_time = 0.0
-    oracle_ratio = 0.0
 
     # Choose the repair command
     pos_file = None
@@ -566,8 +363,6 @@ def repair_and_update_entry(cursor, conn, row):
         base_format = format_key.split('_')[-1]
         mutation_type = format_key.split('_')[0]  # e.g., "single"
         category = REGEX_DIR_TO_CATEGORY.get(base_format, base_format)
-        runtime_learner = _runtime_betamax_learner()
-        cache_path = _cache_path(base_format, runtime_learner)
         pos_file = f"temp_pos_{id_}_{random.randint(0, 9999)}.txt"
         neg_file = f"temp_neg_{id_}_{random.randint(0, 9999)}.txt"
         seed_pos: list[str] = []
@@ -662,30 +457,21 @@ def repair_and_update_entry(cursor, conn, row):
 
         # Use our Python repairer with validators/regex oracle (handled inside repairer)
         attempts = 500
-        # Prefer validators/ (binary) oracle; allow override via LSTAR_ORACLE_VALIDATOR
+        # Prefer validators/regex validator; allow override via LSTAR_ORACLE_VALIDATOR
         oracle_override = os.environ.get("LSTAR_ORACLE_VALIDATOR")
-        oracle_bin = os.path.join("validators", f"validate_{base_format}")
         oracle_wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-        if oracle_override:
-            oracle_cmd = oracle_override
-        elif os.path.exists(oracle_bin):
-            oracle_cmd = oracle_bin
-        elif os.path.exists(oracle_wrapper):
-            oracle_cmd = oracle_wrapper
-        else:
-            oracle_cmd = None
+        oracle_cmd = oracle_override if oracle_override else (oracle_wrapper if os.path.exists(oracle_wrapper) else None)
         cmd = [
             "python3", "betamax/app/betamax.py",
             "--positives", pos_file,
             "--negatives", neg_file,
             # Use shared cache per format across all bm_* scripts
-            "--grammar-cache", cache_path,
+            "--grammar-cache", os.path.join("cache", f"lstar_{base_format}.json"),
             "--category", category,
             "--broken-file", input_file,
             "--output-file", output_file,
             "--max-attempts", str(attempts),
-            # Avoid betamax's default mutation augmentation during benchmarks.
-            "--mutations", "60",
+            "--mutations", "0"
         ]
         if oracle_cmd:
             cmd += ["--oracle-validator", oracle_cmd]
@@ -701,7 +487,8 @@ def repair_and_update_entry(cursor, conn, row):
             eq_flags += ["--eq-skip-negatives"]
         if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
             eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
-        cmd += ["--learner", runtime_learner]
+        learner = "rpni_xover"
+        cmd += ["--learner", learner]
         cmd += eq_flags
     else:
         # Example usage of your erepair.jar approach
@@ -721,8 +508,7 @@ def repair_and_update_entry(cursor, conn, row):
         if algorithm == "betamax":
             # Raise EC parse timeout per attempt unless overridden (set to 100s)
             env.setdefault("LSTAR_PARSE_TIMEOUT", os.environ.get("LSTAR_PARSE_TIMEOUT", "100.0"))
-            env["BETAMAX_EMIT_METRICS"] = "1"
-            cache_p = cache_path
+            cache_p = os.path.join("cache", f"lstar_{base_format}.json")
             if not QUIET:
                 try:
                     sz = os.path.getsize(cache_p) if os.path.exists(cache_p) else 'NA'
@@ -733,31 +519,20 @@ def repair_and_update_entry(cursor, conn, row):
         local_timeout = REPAIR_TIMEOUT
         if algorithm == "betamax":
             try:
-                if os.environ.get("LSTAR_EC_TIMEOUT"):
-                    local_timeout = int(os.environ["LSTAR_EC_TIMEOUT"])
+                local_timeout = int(os.environ.get("LSTAR_EC_TIMEOUT", "600"))
             except Exception:
                 pass
         if not QUIET:
             print(f"[DEBUG] (ID={id_}, ALG={algorithm}) Timeout set to: {local_timeout}s")
         stdout, stderr = proc.communicate(timeout=local_timeout)
         repair_time = time.time() - start_time
-        return_code = proc.returncode
 
         # Extract oracle info (optional)
         it_o, correct_runs, incorrect_runs, incomplete_runs = extract_oracle_info(stdout)
         if algorithm == "betamax":
             iterations = extract_lstar_attempts(stdout)
-            ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
-            if repair_time > 0:
-                ec_ratio = ec_time / repair_time
-                learn_ratio = learn_time / repair_time
-                oracle_ratio = oracle_time / repair_time
         else:
             iterations = it_o
-            if algorithm == "erepair":
-                oracle_time = extract_oracle_seconds_total(stdout)
-                if repair_time > 0:
-                    oracle_ratio = oracle_time / repair_time
 
         if not QUIET:
             print(f"--- STDOUT (ID={id_}) ---\n{stdout}\n")
@@ -776,30 +551,8 @@ def repair_and_update_entry(cursor, conn, row):
             distance_broken_repaired = levenshtein_distance(broken_text, repaired_text)
             distance_original_repaired = levenshtein_distance(original_text, repaired_text)
 
-    except subprocess.TimeoutExpired as e:
+    except subprocess.TimeoutExpired:
         print(f"[ERROR] Repair timed out for entry ID={id_}, alg={algorithm}, timeout={local_timeout}s")
-        timed_out = 1
-        repair_time = float(local_timeout)
-        stdout = _ensure_text(getattr(e, "output", None))
-        stderr = _ensure_text(getattr(e, "stderr", None))
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        try:
-            out2, err2 = proc.communicate(timeout=5)
-            stdout += _ensure_text(out2)
-            stderr += _ensure_text(err2)
-        except Exception:
-            pass
-        return_code = proc.returncode if proc.returncode is not None else -9
-        if algorithm == "betamax":
-            iterations = extract_lstar_attempts(stdout)
-            ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
-            if repair_time > 0:
-                ec_ratio = ec_time / repair_time
-                learn_ratio = learn_time / repair_time
-                oracle_ratio = oracle_time / repair_time
     except Exception as e:
         print(f"[ERROR] Repair failed for entry ID={id_}: {e}")
     finally:
@@ -822,29 +575,20 @@ def repair_and_update_entry(cursor, conn, row):
                 pass
             os.remove(neg_file)
 
-    _update_results_row(
-        cursor,
-        conn,
-        id_=id_,
-        repaired_text=repaired_text,
-        fixed=fixed,
-        iterations=iterations,
-        repair_time=repair_time,
-        correct_runs=correct_runs,
-        incorrect_runs=incorrect_runs,
-        incomplete_runs=incomplete_runs,
-        distance_original_broken=distance_original_broken,
-        distance_broken_repaired=distance_broken_repaired,
-        distance_original_repaired=distance_original_repaired,
-        timed_out=timed_out,
-        return_code=return_code,
-        ec_time=ec_time,
-        ec_ratio=ec_ratio,
-        learn_time=learn_time,
-        learn_ratio=learn_ratio,
-        oracle_time=oracle_time,
-        oracle_ratio=oracle_ratio,
-    )
+    # Update the database record
+    cursor.execute("""
+        UPDATE results
+        SET repaired_text = ?, fixed = ?, iterations = ?, repair_time = ?,
+            correct_runs = ?, incorrect_runs = ?, incomplete_runs = ?,
+            distance_original_broken = ?, distance_broken_repaired = ?, distance_original_repaired = ?
+        WHERE id = ?
+    """, (
+        repaired_text, fixed, iterations, repair_time,
+        correct_runs, incorrect_runs, incomplete_runs,
+        distance_original_broken, distance_broken_repaired, distance_original_repaired,
+        id_
+    ))
+    conn.commit()
 
 
 def rerun_repairs_for_selected_formats(db_path: str, selected_formats=None, max_workers=None):
@@ -857,8 +601,6 @@ def rerun_repairs_for_selected_formats(db_path: str, selected_formats=None, max_
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    _ensure_results_schema(cursor)
-    conn.commit()
 
     # Fetch entries for the desired formats
     cursor.execute("""
@@ -923,7 +665,7 @@ def main():
     parser.add_argument("--mutations", nargs="+", default=MUTATION_TYPES,
                         help="Either mutation type names (e.g. 'double') or a numeric cap "
                              "that limits how many samples per format to load.")
-    parser.add_argument("--algorithms", nargs="+", choices=ALL_ALGORITHMS, help="Override algorithms to run")
+    parser.add_argument("--algorithms", nargs="+", choices=REPAIR_ALGORITHMS, help="Override algorithms to run")
     parser.add_argument("--resume-only", action="store_true", help="Skip sample insertion, only resume unfinished repairs")
     parser.add_argument("--resume", action="store_true", help="Alias of --resume-only (also skips precompute)")
     parser.add_argument("--max-workers", type=int, help="Max parallel workers (default: cpu count)")
@@ -963,18 +705,18 @@ def main():
     if args.algorithms:
         # override algorithms in-place
         REPAIR_ALGORITHMS[:] = args.algorithms
+
     # 1) Create or reuse the database
     create_database(db_path)
 
     # Precompute L* grammar caches for betamax (per format) using first 20 pos/neg
     if "betamax" in REPAIR_ALGORITHMS:
-        os.makedirs(CACHE_ROOT, exist_ok=True)
-        cache_learner = _cache_betamax_learner()
+        os.makedirs("cache", exist_ok=True)
         for mutation_type in (args.mutations if args.mutations else MUTATION_TYPES):
             for fmt in (args.formats if args.formats else VALID_FORMATS):
                 format_key = f"{mutation_type}_{fmt}"
                 # Use shared cache per format across all bm_* (single/double/triple)
-                cache_path = _cache_path(fmt, cache_learner)
+                cache_path = os.path.join("cache", f"lstar_{fmt}.json")
                 if os.path.exists(cache_path):
                     continue
                 # Pick a source DB for precompute: prefer env LSTAR_CACHE_SOURCE_MUTATION, else fallback to single/double/triple
@@ -1008,25 +750,19 @@ def main():
                             nf.write(line + "\n")
                     connc.close()
                     category = REGEX_DIR_TO_CATEGORY.get(fmt, fmt)
-                    # Prefer validators/ (binary) oracle for precompute; allow override via LSTAR_ORACLE_VALIDATOR
+                    # Prefer validators/regex validator for precompute; allow override via LSTAR_ORACLE_VALIDATOR
                     oracle_override = os.environ.get("LSTAR_ORACLE_VALIDATOR")
-                    oracle_bin = os.path.join("validators", f"validate_{fmt}")
                     oracle_wrapper = os.path.join("validators", "regex", f"validate_{fmt}")
-                    if oracle_override:
-                        oracle_cmd = oracle_override
-                    elif os.path.exists(oracle_bin):
-                        oracle_cmd = oracle_bin
-                    elif os.path.exists(oracle_wrapper):
-                        oracle_cmd = oracle_wrapper
-                    else:
-                        oracle_cmd = None
+                    oracle_cmd = oracle_override if oracle_override else (oracle_wrapper if os.path.exists(oracle_wrapper) else None)
                     cmd = [
                         "python3", "betamax/app/betamax.py",
                         "--positives", pos_file,
                         "--negatives", neg_file,
                         "--category", category,
                         "--grammar-cache", cache_path,
-                        "--init-cache"
+                        "--init-cache",
+                        # Avoid betamax's default mutation augmentation during benchmarks.
+                        "--mutations", "0",
                     ]
                     if oracle_cmd:
                         cmd += ["--oracle-validator", oracle_cmd]
@@ -1042,11 +778,9 @@ def main():
                         eq_flags += ["--eq-skip-negatives"]
                     if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
                         eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
-                    learner_pre = cache_learner
+                    learner_pre = "rpni_xover"
                     cmd += ["--learner", learner_pre]
                     cmd += eq_flags
-                    pre_mut = os.environ.get("LSTAR_PRECOMPUTE_MUTATIONS", "60")
-                    cmd += ["--mutations", str(pre_mut)]
                     print(f"[DEBUG] Precompute cache for {format_key}: {' '.join(cmd)} (K={pre_k})")
                     pre_tmo = int(os.environ.get("LSTAR_PRECOMPUTE_TIMEOUT", "600"))
                     env = dict(os.environ)

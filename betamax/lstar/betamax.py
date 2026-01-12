@@ -516,7 +516,7 @@ def lstar_learn_with_oracle(
             T.add_prefix(counter[: i + 1], oracle)
 
 
-def earley_correct(g: Grammar, start_sym: str, broken: str, symbols: List[str] = None, log: bool = False, penalty: Optional[int] = None, max_penalty: Optional[int] = None) -> str:
+def earley_correct(g: Grammar, start_sym: str, broken: str, symbols: List[str] = None, log: bool = False, penalty: Optional[int] = None) -> str:
     """
     Use the error-correcting Earley parser with a covering grammar to fix 'broken'.
     If 'penalty' is provided, attempt to select a solution with exactly that correction penalty.
@@ -528,15 +528,14 @@ def earley_correct(g: Grammar, start_sym: str, broken: str, symbols: List[str] =
 
     covering_grammar, covering_start = ec.augment_grammar_ex(g, start_sym, symbols=symbols)
     parser = ec.ErrorCorrectingEarleyParser(covering_grammar)
-    # Max penalty pruning disabled; do not set parser.max_penalty here
 
     # Parse timeout (seconds), can be overridden via env LSTAR_PARSE_TIMEOUT
     try:
-        parse_timeout = float(os.getenv("LSTAR_PARSE_TIMEOUT", "100.0"))
+        parse_timeout = float(os.getenv("LSTAR_PARSE_TIMEOUT", "600"))
     except Exception:
-        parse_timeout = 40.0
+        parse_timeout = 240.0
 
-    # Single parse attempt without max_penalty budget retries
+    # Single parse attempt without extra budget retries
     se = None
     last_err = None
     # Timeout guard around parse (uses Unix signals; works on macOS/Linux)
@@ -609,111 +608,15 @@ def earley_correct(g: Grammar, start_sym: str, broken: str, symbols: List[str] =
     return fixed
 
 
-def earley_correct_min_penalty(g: Grammar, start_sym: str, broken: str, symbols: List[str] = None, log: bool = False, min_penalty: int = 1, max_penalty: Optional[int] = None) -> Optional[str]:
+def enumerate_repairs(g: Grammar, start_sym: str, broken: str, symbols: List[str] = None, log: bool = False, penalties: Optional[List[int]] = None, limit: Optional[int] = None) -> List[str]:
     """
-    Like earley_correct but forces the minimum correction penalty to be >= min_penalty.
-    If env LSTAR_RANDOM_MIN_PENALTY is set (e.g., via --random-penalty), choose ONE random penalty
-    in [min_penalty..max_penalty] and try only that; otherwise iterate the range.
-    Returns first fixed string found, or None if no parse exists.
-    """
-    if symbols is None:
-        symbols = terminals_of_grammar(g)
-    cover, start_cov = ec.augment_grammar_ex(g, start_sym, symbols=symbols)
-    parser = ec.ErrorCorrectingEarleyParser(cover)
-
-    # Determine bounds
-    if max_penalty is None:
-        try:
-            max_penalty = int(os.getenv("LSTAR_MAX_PENALTY", "32"))
-        except Exception:
-            max_penalty = 32
-
-    parse_timeout = 600.0
-
-    def try_with_penalty(p: int) -> Optional[str]:
-        try:
-            # Timeout guard
-            import signal
-            def _timeout_handler(signum, frame):
-                raise TimeoutError("parse timeout")
-            old_handler = None
-            try:
-                old_handler = signal.getsignal(signal.SIGALRM)
-                signal.signal(signal.SIGALRM, _timeout_handler)
-            except Exception:
-                old_handler = None
-            try:
-                if hasattr(signal, "setitimer"):
-                    signal.setitimer(signal.ITIMER_REAL, max(0.0, parse_timeout))
-                else:
-                    secs = int(parse_timeout) if parse_timeout >= 1 else 1
-                    signal.alarm(secs)
-                se = ec.SimpleExtractorEx(parser, broken, start_cov, penalty=p, log=log)
-            finally:
-                try:
-                    if hasattr(signal, "setitimer"):
-                        signal.setitimer(signal.ITIMER_REAL, 0)
-                    else:
-                        signal.alarm(0)
-                except Exception:
-                    pass
-                try:
-                    if old_handler is not None:
-                        signal.signal(signal.SIGALRM, old_handler)
-                except Exception:
-                    pass
-            tree = se.extract_a_tree()
-            return ec.tree_to_str_fix_ex(tree) if hasattr(ec, "tree_to_str_fix_ex") else ec.tree_to_str(tree)
-        except Exception as e:
-            if log:
-                try:
-                    print(f"[DEBUG] min-penalty probe p={p} failed: {e}")
-                except Exception:
-                    pass
-            return None
-
-    # Random single selection mode
-    random_one = os.getenv("LSTAR_RANDOM_MIN_PENALTY", "").lower() in ("1", "true", "yes")
-    lo = max(1, int(min_penalty))
-    hi = max(1, int(max_penalty))
-    if random_one:
-        try:
-            p = random.randint(lo, hi)
-        except Exception:
-            import random as _rnd
-            p = _rnd.randint(lo, hi)
-        if log:
-            try:
-                print(f"[DEBUG] min-penalty(random-one): p={p} in [{lo}..{hi}]")
-            except Exception:
-                pass
-        return try_with_penalty(p)
-
-    # Default: iterate p = min_penalty..max_penalty
-    for p in range(lo, hi + 1):
-        res = try_with_penalty(p)
-        if res is not None:
-            return res
-    return None
-
-
-def enumerate_repairs(g: Grammar, start_sym: str, broken: str, symbols: List[str] = None, log: bool = False, max_penalty: Optional[int] = None, penalties: Optional[List[int]] = None, limit: Optional[int] = None) -> List[str]:
-    """
-    Enumerate ALL candidate repairs up to max_penalty using EC MultiExtractorEx in one parse.
+    Enumerate ALL candidate repairs using EC MultiExtractorEx in one parse.
     Returns a de-duplicated list of candidate fixed strings (order by increasing total penalty).
     """
-    # If symbols not provided, infer from grammar terminals
     if symbols is None:
         symbols = terminals_of_grammar(g)
     covering_grammar, covering_start = ec.augment_grammar_ex(g, start_sym, symbols=symbols)
     parser = ec.ErrorCorrectingEarleyParser(covering_grammar)
-    # Configure parser pruning threshold: CLI-provided > env > default 32
-    if max_penalty is None:
-        try:
-            max_penalty = int(os.getenv("LSTAR_MAX_PENALTY", "32"))
-        except Exception:
-            max_penalty = 32
-    # Single parse_prefix; enumerate all trees across penalties and forest choices
     mx = ec.MultiExtractorEx(parser, broken, covering_start, penalties=penalties, log=log)
     out: List[str] = []
     seen = set()
@@ -832,7 +735,6 @@ def main():
     ap.add_argument("--unknown-policy", default="negative", choices=["negative","positive","error"], help="Unknown membership policy for SampleTeacher")
     ap.add_argument("--log", action="store_true", help="Verbose logs for ErrorCorrectingEarley")
     ap.add_argument("--penalty", type=int, help="Target correction penalty to select (capped at 8). Omit to choose minimum-penalty solution.")
-    ap.add_argument("--max-penalty", type=int, default=8, help="Max correction penalty allowed during parsing (higher tolerates longer junk). Overrides env LSTAR_MAX_PENALTY.")
     ap.add_argument("--update-cache-on-relearn", action="store_true", help="If set, overwrite the grammar cache on relearning attempts. Default keeps the original cache intact.")
     ap.add_argument("--results-json", help="Write per-case repair results to this JSON file")
     ap.add_argument("--learner", default="rpni", choices=["lstar_oracle","rpni","rpni_nfa","rpni_fuzz","rpni_xover"], help="Learning algorithm: 'rpni' (default) uses passive RPNI; 'lstar_oracle' uses L* with validator-backed oracle; 'rpni_nfa' uses modified RPNI that keeps an NFA; 'rpni_fuzz' uses RPNI with fuzzing-based DFA consistency checks; 'rpni_xover' uses RPNI with cross-over consistency checks based on positives")
@@ -844,14 +746,13 @@ def main():
     ap.add_argument("--eq-skip-negatives", action="store_true", help="Skip checking negatives in equivalence (fewer grammar parses, faster)")
     ap.add_argument("--eq-max-oracle", type=int, help="Max oracle calls allowed in equivalence sampling per run; accept hypothesis when exhausted")
     # EC enumeration controls
-    ap.add_argument("--ec-enumerate", action="store_true", help="Enumerate ALL repair candidates up to max-penalty in a single EC run")
+    ap.add_argument("--ec-enumerate", action="store_true", help="Enumerate ALL repair candidates in a single EC run")
     ap.add_argument("--ec-limit", type=int, help="Optional cap on number of candidates enumerated per input to avoid explosion")
     ap.add_argument("--accumulate-negatives-round", action="store_true", help="Accumulate failing broken inputs across a full pass, then relearn once (batch rounds)")
     ap.add_argument("--mutations", type=int, default=20, help="Number of mutated samples to generate from positives using only existing characters")
     ap.add_argument("--mutations-random", action="store_true", help="Generate mutations randomly (instead of deterministic enumeration)")
     ap.add_argument("--mutations-deterministic", action="store_true", help="Force deterministic mutation enumeration (overrides --mutations-random)")
     ap.add_argument("--mutations-seed", type=int, help="Random seed for mutation generation (optional)")
-    ap.add_argument("--random-penalty", action="store_true", help="Randomly choose a penalty in [1..--max-penalty] for EC; falls back to min-penalty on invalid")
     args = ap.parse_args()
 
     # Prepare optional oracle validator command override
@@ -875,24 +776,6 @@ def main():
                 print(f"[WARN] --penalty {p} exceeds max of 8; capping to 8.")
             p = 8
         penalty_val = p
-    # Optional: random penalty selection if not explicitly provided
-    if getattr(args, "random_penalty", False) and penalty_val is None:
-        try:
-            max_p = int(getattr(args, "max_penalty", 8))
-        except Exception:
-            max_p = 8
-        try:
-            penalty_val = random.randint(1, max(1, max_p))
-            if args.log:
-                print(f"[DEBUG] Randomly selected penalty={penalty_val} in [1..{max_p}]")
-        except Exception:
-            pass
-    # Propagate preference for random penalty selection to min-penalty helper via env
-    try:
-        if getattr(args, "random_penalty", False):
-            os.environ["LSTAR_RANDOM_MIN_PENALTY"] = "1"
-    except Exception:
-        pass
 
     pos_lines = read_lines(args.positives) if args.positives and os.path.isfile(args.positives) else []
     neg_lines = read_lines(args.negatives) if args.negatives and os.path.isfile(args.negatives) else []
@@ -956,6 +839,7 @@ def main():
     start_sym: str
     alphabet: List[str]
     cache_path = args.grammar_cache
+    initial_learn_seconds = 0.0
 
     if cache_path and os.path.exists(cache_path) and not args.init_cache:
         print(f"[INFO] Loading grammar cache from {cache_path}")
@@ -996,6 +880,7 @@ def main():
                 eq_budget=getattr(args, "eq_max_oracle", None),
             )
         t_learn1 = time.time()
+        initial_learn_seconds = (t_learn1 - t_learn0)
         t_prep0 = time.time()
         # Sanitize to make it JSON-serializable and friendly for the parser
         g = sanitize_grammar(expand_set_terminals(g_raw, alphabet))
@@ -1024,6 +909,9 @@ def main():
             break
         processed += 1
         print(f"\n[CASE {processed}] Broken: {repr(broken)}")
+        learn_seconds_total = initial_learn_seconds if processed == 1 else 0.0
+        ec_seconds_total = 0.0
+        oracle_seconds_total = 0.0
         last_fixed: Optional[str] = None
         t0 = time.time()
         if any(isinstance(t, (set, frozenset)) for alts in g.values() for alt in alts for t in alt):
@@ -1045,6 +933,7 @@ def main():
             t_or0 = time.time()
             ok0 = validate_with_match(args.category, broken, validator_cmd)
             t_or1 = time.time()
+            oracle_seconds_total += (t_or1 - t_or0)
             print(f"[PROFILE] oracle_validate(as-is): {t_or1 - t_or0:.2f}s")
             if not ok0:
                 print("[INFO] As-is input is accepted by grammar but rejected by oracle; scheduling relearn.")
@@ -1057,27 +946,17 @@ def main():
         # Default path: either single best (earley_correct) or enumerate all candidates (MultiExtractorEx)
         broken_parse = broken
         t2 = time.time()
-        # If random penalty requested (and not explicitly set), pick a random penalty per run
         penalty_arg = penalty_val
-        if getattr(args, "random_penalty", False) and getattr(args, "penalty", None) is None:
-            try:
-                max_p = int(getattr(args, "max_penalty", 8))
-            except Exception:
-                max_p = 8
-            try:
-                penalty_arg = random.randint(1, max(1, max_p))
-                if args.log:
-                    print(f"[DEBUG] Randomly selected penalty={penalty_arg} in [1..{max_p}]")
-            except Exception:
-                penalty_arg = penalty_val
-        fixed = earley_correct(g_norm, start_sym, broken_parse, symbols=alphabet, log=args.log, penalty=penalty_arg, max_penalty=int(getattr(args, "max_penalty", 8)))
+        fixed = earley_correct(g_norm, start_sym, broken_parse, symbols=alphabet, log=args.log, penalty=penalty_arg)
         t3 = time.time()
+        ec_seconds_total += (t3 - t2)
         print(f"[PROFILE] ec_earley: {t3 - t2:.2f}s")
 
         t4 = time.time()
         ok = validate_with_match(args.category, fixed, validator_cmd)
         final_ok = ok
         t5 = time.time()
+        oracle_seconds_total += (t5 - t4)
         print(f"[PROFILE] oracle_validate: {t5 - t4:.2f}s")
 
         print(f"[ATTEMPT 0] Fixed: {repr(fixed)} | Oracle: {'OK' if ok else 'FAIL'}")
@@ -1092,6 +971,13 @@ def main():
         if ok:
             successes += 1
             results.append({"broken": broken, "fixed": last_fixed, "ok": bool(final_ok)})
+            if os.environ.get("BETAMAX_EMIT_METRICS"):
+                try:
+                    print(f"[METRICS] ec_seconds_total={ec_seconds_total:.6f}")
+                    print(f"[METRICS] learn_seconds_total={learn_seconds_total:.6f}")
+                    print(f"[METRICS] oracle_seconds_total={oracle_seconds_total:.6f}")
+                except Exception:
+                    pass
             continue
 
         # If oracle failed, add this broken example and the best failed candidate (if any) to Teacher.negatives and relearn up to max-attempts
@@ -1125,6 +1011,7 @@ def main():
                         eq_budget=getattr(args, "eq_max_oracle", None),
                     )
                 t_learn1 = time.time()
+                learn_seconds_total += (t_learn1 - t_learn0)
                 t_prep0 = time.time()
                 g = sanitize_grammar(expand_set_terminals(g_raw, alphabet))
                 t_prep1 = time.time()
@@ -1160,6 +1047,7 @@ def main():
                     t_or0 = time.time()
                     ok0 = validate_with_match(args.category, broken, validator_cmd)
                     t_or1 = time.time()
+                    oracle_seconds_total += (t_or1 - t_or0)
                     print(f"[PROFILE] oracle_validate(as-is,relearn): {t_or1 - t_or0:.2f}s")
                     if not ok0:
                         print(f"[INFO] [ATTEMPT {attempt}] As-is input accepted by grammar but rejected by oracle; will relearn again.")
@@ -1170,27 +1058,17 @@ def main():
 
                 broken_parse = broken
                 t2 = time.time()
-                # Random penalty per attempt if requested (and no explicit --penalty)
                 penalty_arg = penalty_val
-                if getattr(args, "random_penalty", False) and getattr(args, "penalty", None) is None:
-                    try:
-                        max_p = int(getattr(args, "max_penalty", 8))
-                    except Exception:
-                        max_p = 8
-                    try:
-                        penalty_arg = random.randint(1, max(1, max_p))
-                        if args.log:
-                            print(f"[DEBUG] [ATTEMPT {attempt}] Randomly selected penalty={penalty_arg} in [1..{max_p}]")
-                    except Exception:
-                        penalty_arg = penalty_val
-                fixed = earley_correct(g_norm, start_sym, broken_parse, symbols=alphabet, log=args.log, penalty=penalty_arg, max_penalty=int(getattr(args, "max_penalty", 8)))
+                fixed = earley_correct(g_norm, start_sym, broken_parse, symbols=alphabet, log=args.log, penalty=penalty_arg)
                 t3 = time.time()
+                ec_seconds_total += (t3 - t2)
                 print(f"[PROFILE] ec_earley(relearn): {t3 - t2:.2f}s")
 
                 t4 = time.time()
                 cur_ok = validate_with_match(args.category, fixed, validator_cmd)
                 final_ok = cur_ok
                 t5 = time.time()
+                oracle_seconds_total += (t5 - t4)
                 print(f"[PROFILE] oracle_validate(relearn): {t5 - t4:.2f}s")
 
                 print(f"[ATTEMPT {attempt}] Fixed: {repr(fixed)} | Oracle: {'OK' if cur_ok else 'FAIL'}")
@@ -1217,6 +1095,13 @@ def main():
             results.append({"broken": broken, "fixed": last_fixed, "ok": bool(final_ok)})
         except Exception:
             pass
+        if os.environ.get("BETAMAX_EMIT_METRICS"):
+            try:
+                print(f"[METRICS] ec_seconds_total={ec_seconds_total:.6f}")
+                print(f"[METRICS] learn_seconds_total={learn_seconds_total:.6f}")
+                print(f"[METRICS] oracle_seconds_total={oracle_seconds_total:.6f}")
+            except Exception:
+                pass
 
     print(f"\n[SUMMARY] Processed={processed}, Successes={successes}, Failures={failures}")
     # Optional: write results JSON for batch runs (useful when stdout isn't captured)

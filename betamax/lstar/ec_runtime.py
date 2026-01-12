@@ -177,12 +177,6 @@ class ErrorCorrectingEarleyParser(earleyparser.EarleyParser):
     def __init__(self, grammar: Dict[str, List[List[str]]], log: bool = False, **kwargs):
         self._grammar = grammar
         self.log = log
-        # Max penalty pruning (disabled by default; enable via env LSTAR_MAX_PENALTY)
-        _mp = os.getenv("LSTAR_MAX_PENALTY")
-        try:
-            self.max_penalty = int(_mp) if _mp not in (None, "") else None
-        except Exception:
-            self.max_penalty = None
         # Initialize base parser first (it may assign its own epsilon)
         super().__init__(grammar, **kwargs)
         # Now override with our penalty-aware nullable map
@@ -262,13 +256,6 @@ class ECState(earleyparser.State):
 
 class ECColumn(earleyparser.Column):
     def add(self, state):
-        # Prune by penalty threshold if provided on column
-        if hasattr(self, "max_penalty"):
-            try:
-                if state.penalty > self.max_penalty:
-                    return state  # skip adding overly costly state
-            except Exception:
-                pass
         if state in self._unique:
             if self._unique[state].penalty > state.penalty:
                 self._unique[state] = state
@@ -284,8 +271,6 @@ class ECColumn(earleyparser.Column):
 class ErrorCorrectingEarleyParser(ErrorCorrectingEarleyParser):
     def create_column(self, i, tok):
         col = ECColumn(i, tok)
-        # propagate parser-level pruning parameters to column
-        setattr(col, "max_penalty", getattr(self, "max_penalty", None))
         return col
 
     def create_state(self, sym, alt, num, col):
@@ -387,11 +372,10 @@ class SimpleExtractorEx(SimpleExtractor):
 class MultiExtractorEx:
     """
     Enumerate ALL candidate parse trees (and thus repair strings) for the given text
-    up to the parser's max_penalty in a single EC run.
+    in a single EC run.
 
     Usage:
       parser = ErrorCorrectingEarleyParser(covering_grammar)
-      parser.max_penalty = N  # pruning upper bound (≤ N explored)
       mx = MultiExtractorEx(parser, text, start_symbol, penalties=None, log=False)
       for tree in mx.trees(limit=K):
           ...

@@ -4,8 +4,6 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
-#include <algorithm>
-#include <cctype>
 
 static std::string trim(const std::string &s) {
     auto begin = s.begin();

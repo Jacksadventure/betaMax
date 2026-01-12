@@ -238,8 +238,6 @@ python betamax/app/betamax.py \
 
   ```bash
   --penalty 3        # target correction penalty (0–8, capped at 8)
-  --max-penalty 8    # maximum penalty EC parser will consider
-  --random-penalty   # choose a random penalty per run (within [1..max-penalty])
   ```
 
 - Log more detail from the error-correcting Earley parser:

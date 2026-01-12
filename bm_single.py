@@ -7,6 +7,9 @@ import time
 import random
 import concurrent.futures
 import argparse
+from typing import Optional
+
+from bm_lstar_mutations import LStarMutationPool, get_mutation_table_name
 
 # ------------------------------------------------------------------------------
 # Configuration
@@ -15,8 +18,12 @@ DATABASE_PATH = "single.db"  # Name of the new database to create
 REPAIR_OUTPUT_DIR = "repair_results"  # Directory where repair outputs are stored
 os.makedirs(REPAIR_OUTPUT_DIR, exist_ok=True)
 
-# Possible repair algorithms you want to test
-REPAIR_ALGORITHMS = ["lstar_ec"]
+# Supported repair algorithms (CLI choices)
+ALL_ALGORITHMS = ["erepair", "earley", "betamax"]
+
+
+# Default repair algorithms to run (can be overridden via --algorithms)
+REPAIR_ALGORITHMS = ["betamax"]
 
 PROJECT_PATHS = {
     "dot": "project/erepair-subjects/dot/build/dot_parser",
@@ -46,7 +53,7 @@ REGEX_DIR_TO_CATEGORY = {
 REGEX_FORMATS = set(REGEX_DIR_TO_CATEGORY.keys())
 
 # Valid formats/folders to process
-VALID_FORMATS = ["date", "time", "url", "isbn", "ipv4", "ipv6"]
+VALID_FORMATS = ["date", "time", "isbn", "ipv4", "ipv6", "url"]
 
 
 MUTATION_TYPES = ["single"]
@@ -55,11 +62,41 @@ MUTATION_TYPES = ["single"]
 TRAIN_K = int(os.environ.get("BM_TRAIN_K", "50"))
 TEST_K = int(os.environ.get("BM_TEST_K", "50"))
 
+# Shared mutation pool manager
+LSTAR_MUTATION_POOL = LStarMutationPool(TRAIN_K, REGEX_FORMATS, REGEX_DIR_TO_CATEGORY)
+
+CACHE_ROOT = os.environ.get("LSTAR_CACHE_ROOT", "cache")
+os.makedirs(CACHE_ROOT, exist_ok=True)
+
+
+def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
+    """
+    Build the cache path for a given format/learner combo so grammars learned
+    with different algorithms do not overwrite each other.
+    """
+    learner_name = (learner or _runtime_betamax_learner()).replace("-", "_")
+    return os.path.join(CACHE_ROOT, f"lstar_{fmt}_{learner_name}.json")
+
+
+def _runtime_betamax_learner() -> str:
+    """Return learner name for runtime BETAMAX invocation."""
+    return os.environ.get("LSTAR_LEARNER",
+                          os.environ.get("BM_BETAMAX_LEARNER",
+                                         "rpni"))
+
+
+def _cache_betamax_learner() -> str:
+    """Return learner name for cache/precompute steps."""
+    return os.environ.get("LSTAR_CACHE_LEARNER",
+                          os.environ.get("LSTAR_LEARNER",
+                                         os.environ.get("BM_BETAMAX_LEARNER",
+                                                        "rpni")))
+
 # Parser timeout (in seconds)
-VALIDATION_TIMEOUT = 30
+VALIDATION_TIMEOUT = 600
 
 # Repair timeout (in seconds)
-REPAIR_TIMEOUT = 240
+REPAIR_TIMEOUT = 600
 
 # Verbosity and run-control
 QUIET = False          # suppress per-entry stdout/stderr and noisy logs
@@ -103,9 +140,159 @@ def create_database(db_path: str):
             distance_original_repaired INTEGER
         )
     """)
+    _ensure_results_schema(cursor)
     conn.commit()
     conn.close()
     print(f"[INFO] Created/checked table 'results' in database '{db_path}'.")
+
+def _ensure_results_schema(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("PRAGMA table_info(results)")
+    existing = {row[1] for row in cursor.fetchall()}
+    additions = [
+        ("timed_out", "INTEGER DEFAULT 0"),
+        ("return_code", "INTEGER"),
+        ("ec_time", "REAL DEFAULT 0.0"),
+        ("ec_ratio", "REAL DEFAULT 0.0"),
+        ("learn_time", "REAL DEFAULT 0.0"),
+        ("learn_ratio", "REAL DEFAULT 0.0"),
+        ("oracle_time", "REAL DEFAULT 0.0"),
+        ("oracle_ratio", "REAL DEFAULT 0.0"),
+    ]
+    for name, decl in additions:
+        if name in existing:
+            continue
+        try:
+            cursor.execute(f"ALTER TABLE results ADD COLUMN {name} {decl}")
+        except Exception:
+            pass
+
+
+def _results_columns(cursor: sqlite3.Cursor) -> set[str]:
+    cursor.execute("PRAGMA table_info(results)")
+    return {row[1] for row in cursor.fetchall()}
+
+
+def _update_results_row(
+    cursor: sqlite3.Cursor,
+    conn: sqlite3.Connection,
+    *,
+    id_: int,
+    repaired_text: str,
+    fixed: int,
+    iterations: int,
+    repair_time: float,
+    correct_runs: int,
+    incorrect_runs: int,
+    incomplete_runs: int,
+    distance_original_broken: int,
+    distance_broken_repaired: int,
+    distance_original_repaired: int,
+    timed_out: int,
+    return_code: int,
+    ec_time: float,
+    ec_ratio: float,
+    learn_time: float,
+    learn_ratio: float,
+    oracle_time: float,
+    oracle_ratio: float,
+) -> None:
+    cols = _results_columns(cursor)
+    assignments = [
+        "repaired_text = ?",
+        "fixed = ?",
+        "iterations = ?",
+        "repair_time = ?",
+        "correct_runs = ?",
+        "incorrect_runs = ?",
+        "incomplete_runs = ?",
+        "distance_original_broken = ?",
+        "distance_broken_repaired = ?",
+        "distance_original_repaired = ?",
+    ]
+    params: list[object] = [
+        repaired_text,
+        fixed,
+        iterations,
+        repair_time,
+        correct_runs,
+        incorrect_runs,
+        incomplete_runs,
+        distance_original_broken,
+        distance_broken_repaired,
+        distance_original_repaired,
+    ]
+
+    optional = [
+        ("timed_out", timed_out),
+        ("return_code", return_code),
+        ("ec_time", ec_time),
+        ("ec_ratio", ec_ratio),
+        ("learn_time", learn_time),
+        ("learn_ratio", learn_ratio),
+        ("oracle_time", oracle_time),
+        ("oracle_ratio", oracle_ratio),
+    ]
+    for col, val in optional:
+        if col not in cols:
+            continue
+        assignments.append(f"{col} = ?")
+        params.append(val)
+
+    params.append(id_)
+    cursor.execute(
+        f"UPDATE results SET {', '.join(assignments)} WHERE id = ?",
+        params,
+    )
+    conn.commit()
+
+
+_RE_METRIC = re.compile(r"^\[METRICS\]\s+([a-zA-Z0-9_]+)=([0-9]*\.?[0-9]+)\s*$", re.MULTILINE)
+_RE_PROFILE_EC = re.compile(r"^\[PROFILE\]\s+ec_earley(?:\(relearn\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
+_RE_PROFILE_LEARN_TOTAL = re.compile(r"^\[PROFILE\]\s+learn_grammar\(total\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
+_RE_PROFILE_LEARN_RELEARN = re.compile(r"^\[PROFILE\]\s+learn_grammar\(relearn\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
+_RE_PROFILE_ORACLE = re.compile(r"^\[PROFILE\]\s+oracle_validate(?:\([^\)]*\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
+
+
+def _extract_betamax_metrics(stdout: str) -> tuple[float, float, float]:
+    kv: dict[str, float] = {}
+    for m in _RE_METRIC.finditer(stdout or ""):
+        try:
+            kv[m.group(1)] = float(m.group(2))
+        except Exception:
+            continue
+    if "ec_seconds_total" in kv or "learn_seconds_total" in kv or "oracle_seconds_total" in kv:
+        return (
+            float(kv.get("ec_seconds_total", 0.0)),
+            float(kv.get("learn_seconds_total", 0.0)),
+            float(kv.get("oracle_seconds_total", 0.0)),
+        )
+    ec_time = sum(float(m.group(1)) for m in _RE_PROFILE_EC.finditer(stdout or "") if m.group(1))
+    learn_time = 0.0
+    for m in _RE_PROFILE_LEARN_TOTAL.finditer(stdout or ""):
+        try:
+            learn_time += float(m.group(1))
+        except Exception:
+            pass
+    for m in _RE_PROFILE_LEARN_RELEARN.finditer(stdout or ""):
+        try:
+            learn_time += float(m.group(1))
+        except Exception:
+            pass
+    oracle_time = 0.0
+    for m in _RE_PROFILE_ORACLE.finditer(stdout or ""):
+        try:
+            oracle_time += float(m.group(1))
+        except Exception:
+            pass
+    return ec_time, learn_time, oracle_time
+
+
+def _ensure_text(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, bytes):
+        return val.decode("utf-8", errors="replace")
+    return str(val)
 
 
 def load_test_samples_from_db(mutation_db_path: str):
@@ -117,8 +304,9 @@ def load_test_samples_from_db(mutation_db_path: str):
         return []
 
     conn = sqlite3.connect(mutation_db_path)
+    table_name = get_mutation_table_name(mutation_db_path, conn)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, original_text, mutated_text FROM mutations ORDER BY id")
+    cursor.execute(f"SELECT id, original_text, mutated_text FROM {table_name} ORDER BY id")
     samples = cursor.fetchall()
     conn.close()
 
@@ -139,7 +327,7 @@ def insert_test_samples_to_db(db_path: str, format_key: str, test_samples: list)
     for (file_id, cindex, orig_text, broken_text) in test_samples:
         for alg in REPAIR_ALGORITHMS:
             base_f = format_key.split('_')[-1]
-            if base_f in REGEX_FORMATS and alg not in ("erepair", "earley", "lstar_ec"):
+            if base_f in REGEX_FORMATS and alg not in ("erepair", "earley", "betamax"):
                 continue
             # Skip if this combination already exists (enables resume)
             cursor.execute(
@@ -165,7 +353,7 @@ def validate_with_external_tool(file_path: str, format_key: str, algorithm: str)
     Validate a repaired file using validators/regex validate_* if available,
     otherwise validators/validate_* (earley), or fallback to Python validators.
     - erepair: use match_partial.py Category
-    - lstar_ec: prefer validators/regex/validate_*
+    - betamax: prefer validators/validate_* (binary); fallback to validators/regex or match.py
     - earley: prefer validators/validate_* (binary); fallback to validators/regex or match.py
     """
     base_format = format_key.split('_')[-1]
@@ -174,9 +362,12 @@ def validate_with_external_tool(file_path: str, format_key: str, algorithm: str)
             category = REGEX_DIR_TO_CATEGORY.get(base_format, base_format)
             if algorithm == "erepair":
                 cmd = ["python3", "match_partial.py", category, file_path]
-            elif algorithm == "lstar_ec":
+            elif algorithm == "betamax":
+                validator_bin = os.path.join("validators", f"validate_{base_format}")
                 wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-                if os.path.exists(wrapper):
+                if os.path.exists(validator_bin):
+                    cmd = [validator_bin, file_path]
+                elif os.path.exists(wrapper):
                     cmd = [wrapper, file_path]
                 else:
                     cmd = ["python3", "match.py", category, file_path]
@@ -215,8 +406,20 @@ def validate_with_external_tool(file_path: str, format_key: str, algorithm: str)
         return False
 
 
+def _normalize_for_distance(text: Optional[str]) -> str:
+    """
+    Treat trailing newline/CR characters as insignificant when comparing strings.
+    This keeps benchmark distances aligned with human intuition for single-line inputs.
+    """
+    if text is None:
+        return ""
+    return text.rstrip("\r\n")
+
+
 def levenshtein_distance(a: str, b: str) -> int:
     """Calculate the Levenshtein distance between two strings."""
+    a = _normalize_for_distance(a)
+    b = _normalize_for_distance(b)
     if not a: return len(b)
     if not b: return len(a)
 
@@ -253,6 +456,18 @@ def extract_oracle_info(stdout: str):
     if match:
         return int(match.group(1)), int(match.group(2)), int(match.group(3)), int(match.group(4))
     return 0, 0, 0, 0
+
+
+def extract_oracle_seconds_total(stdout: str) -> float:
+    last_val = 0.0
+    for m in _RE_METRIC.finditer(stdout or ""):
+        if m.group(1) != "oracle_seconds_total":
+            continue
+        try:
+            last_val = float(m.group(2))
+        except Exception:
+            continue
+    return last_val
 
 
 def extract_lstar_attempts(stdout: str) -> int:
@@ -313,6 +528,14 @@ def repair_and_update_entry(cursor, conn, row):
     fixed = 0
     iterations, correct_runs, incorrect_runs, incomplete_runs = 0, 0, 0, 0
     repair_time = 0.0
+    timed_out = 0
+    return_code = None
+    ec_time = 0.0
+    ec_ratio = 0.0
+    learn_time = 0.0
+    learn_ratio = 0.0
+    oracle_time = 0.0
+    oracle_ratio = 0.0
 
     # Choose the repair command
     pos_file = None
@@ -338,80 +561,132 @@ def repair_and_update_entry(cursor, conn, row):
             print(f"[ERROR] No oracle executable for format {base_format}")
             return
         cmd = ["./earleyrepairer", oracle_executable, input_file, output_file]
-    elif algorithm == "lstar_ec":
+    elif algorithm == "betamax":
         # Build top-K positives (K=20) from the corresponding mutation DB (e.g., mutated_files/single_date.db)
         K=TRAIN_K
         base_format = format_key.split('_')[-1]
         mutation_type = format_key.split('_')[0]  # e.g., "single"
         category = REGEX_DIR_TO_CATEGORY.get(base_format, base_format)
+        runtime_learner = _runtime_betamax_learner()
+        cache_path = _cache_path(base_format, runtime_learner)
         pos_file = f"temp_pos_{id_}_{random.randint(0, 9999)}.txt"
         neg_file = f"temp_neg_{id_}_{random.randint(0, 9999)}.txt"
-        try:
-            mdb_path = os.path.join("mutated_files", f"{format_key}.db")
-            conn2 = sqlite3.connect(mdb_path)
-            cur2 = conn2.cursor()
-            # Take the first K originals by id as positives
-            cur2.execute(f"SELECT original_text FROM mutations ORDER BY id LIMIT {K}")
-            rows = cur2.fetchall()
-            # Leave-One-Out: exclude this row's original_text from positives
-            filtered = [(r[0] or "") for r in rows if (r[0] or "") != (original_text or "")]
-            with open(pos_file, "w", encoding="utf-8") as pf:
-                for s in filtered:
-                    line = (s or "").rstrip("\n")
-                    pf.write(line + "\n")
-            pos_count = len(filtered)
+        seed_pos: list[str] = []
+        seed_neg: list[str] = []
+        mut_pos: list[str] = []
+        mut_neg: list[str] = []
+        if LSTAR_MUTATION_POOL:
+            try:
+                LSTAR_MUTATION_POOL.ensure_format(format_key)
+            except Exception as pool_err:
+                if not QUIET:
+                    print(f"[WARN] (ID={id_}) Failed to prime mutation pool for {format_key}: {pool_err}")
+            seed_pos = LSTAR_MUTATION_POOL.get_seed_positives(format_key)
+            seed_neg = LSTAR_MUTATION_POOL.get_seed_negatives(format_key)
+            mut_pos = LSTAR_MUTATION_POOL.get_mutation_positives(format_key)
+            mut_neg = LSTAR_MUTATION_POOL.get_mutation_negatives(format_key)
+
+        filtered_pos: list[str] = []
+        if seed_pos:
+            filtered_pos = [
+                (s or "").rstrip("\n")
+                for s in seed_pos
+                if (s or "") != (original_text or "")
+            ]
             if not QUIET:
-                print(f"[DEBUG] (ID={id_}) LOO positives: count={pos_count}, excluded_original={(original_text or '') not in filtered}")
-            conn2.close()
+                print(f"[DEBUG] (ID={id_}) Loaded {len(filtered_pos)} positives from seed pool (LOO applied).")
+
+        try:
+            if not filtered_pos:
+                mdb_path = os.path.join("mutated_files", f"{format_key}.db")
+                with sqlite3.connect(mdb_path) as conn2:
+                    table_name = get_mutation_table_name(mdb_path, conn2)
+                    cur2 = conn2.cursor()
+                    cur2.execute(f"SELECT original_text FROM {table_name} ORDER BY LENGTH(original_text), id LIMIT {K}")
+                    rows = cur2.fetchall()
+                filtered_pos = [
+                    (r[0] or "").rstrip("\n")
+                    for r in rows
+                    if (r[0] or "") != (original_text or "")
+                ]
+                if not QUIET:
+                    print(f"[DEBUG] (ID={id_}) Loaded positives directly from DB: count={len(filtered_pos)}")
+            if mut_pos:
+                extra = [(s or "").rstrip("\n") for s in mut_pos]
+                filtered_pos.extend(extra)
+                if not QUIET:
+                    print(f"[DEBUG] (ID={id_}) Added {len(extra)} mutation positives to pool.")
+            with open(pos_file, "w", encoding="utf-8") as pf:
+                for line in filtered_pos:
+                    pf.write(line + "\n")
+            pos_count = len(filtered_pos)
         except Exception as e:
-            # Fallback: DB unavailable; write an empty positives file (cache will be used if present)
+            pos_count = 0
             try:
                 with open(pos_file, "w", encoding="utf-8") as pf:
                     pass
                 if not QUIET:
-                    print(f"[DEBUG] (ID={id_}) LOO positives fallback: wrote empty pos file due to DB error: {e}")
+                    print(f"[DEBUG] (ID={id_}) LOO positives fallback: wrote empty pos file due to error: {e}")
             except Exception:
                 pass
 
         # Build initial negatives from first 20 mutated_text (initial hypothesis)
         try:
-            mdb_path = os.path.join("mutated_files", f"{format_key}.db")
-            conn3 = sqlite3.connect(mdb_path)
-            cur3 = conn3.cursor()
-            cur3.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {K}")
-            rows = cur3.fetchall()
+            neg_lines: list[str] = []
+            if seed_neg:
+                neg_lines = [(s or "").rstrip("\n") for s in seed_neg]
+            if not neg_lines:
+                mdb_path = os.path.join("mutated_files", f"{format_key}.db")
+                with sqlite3.connect(mdb_path) as conn3:
+                    table_name = get_mutation_table_name(mdb_path, conn3)
+                    cur3 = conn3.cursor()
+                    cur3.execute(f"SELECT mutated_text FROM {table_name} ORDER BY LENGTH(mutated_text), id LIMIT {K}")
+                    rows = cur3.fetchall()
+                neg_lines = [(r[0] or "").rstrip("\n") for r in rows]
+            if mut_neg:
+                extra_neg = [(s or "").rstrip("\n") for s in mut_neg]
+                neg_lines.extend(extra_neg)
+                if not QUIET:
+                    print(f"[DEBUG] (ID={id_}) Added {len(extra_neg)} mutation negatives to pool.")
             with open(neg_file, "w", encoding="utf-8") as nf:
-                for r in rows:
-                    line = (r[0] or "").rstrip("\n")
+                for line in neg_lines:
                     nf.write(line + "\n")
-            conn3.close()
-        except Exception:
+        except Exception as e:
             # Ensure the negatives file exists even if empty
             try:
                 with open(neg_file, "w", encoding="utf-8") as nf:
                     pass
+                if not QUIET:
+                    print(f"[DEBUG] (ID={id_}) Negatives fallback: wrote empty neg file due to error: {e}")
             except Exception:
                 pass
 
         # Use our Python repairer with validators/regex oracle (handled inside repairer)
         attempts = 500
-        # Prefer validators/regex validator; allow override via LSTAR_ORACLE_VALIDATOR
+        # Prefer validators/ (binary) oracle; allow override via LSTAR_ORACLE_VALIDATOR
         oracle_override = os.environ.get("LSTAR_ORACLE_VALIDATOR")
+        oracle_bin = os.path.join("validators", f"validate_{base_format}")
         oracle_wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-        oracle_cmd = oracle_override if oracle_override else (oracle_wrapper if os.path.exists(oracle_wrapper) else None)
+        if oracle_override:
+            oracle_cmd = oracle_override
+        elif os.path.exists(oracle_bin):
+            oracle_cmd = oracle_bin
+        elif os.path.exists(oracle_wrapper):
+            oracle_cmd = oracle_wrapper
+        else:
+            oracle_cmd = None
         cmd = [
             "python3", "betamax/app/betamax.py",
             "--positives", pos_file,
             "--negatives", neg_file,
             # Use shared cache per format across all bm_* scripts
-            "--grammar-cache", os.path.join("cache", f"lstar_{base_format}.json"),
+            "--grammar-cache", cache_path,
             "--category", category,
             "--broken-file", input_file,
             "--output-file", output_file,
             "--max-attempts", str(attempts),
-            "--mutations", "100",
-            "--random-penalty",
-            "--max-penalty", "8"
+            # Avoid betamax's default mutation augmentation during benchmarks.
+            "--mutations", "0",
         ]
         if oracle_cmd:
             cmd += ["--oracle-validator", oracle_cmd]
@@ -427,15 +702,7 @@ def repair_and_update_entry(cursor, conn, row):
             eq_flags += ["--eq-skip-negatives"]
         if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
             eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
-        learner = os.environ.get("LSTAR_LEARNER", "rpni")
-        cmd += ["--learner", learner]
-        # Optional CLI penalty overrides to strictly control repairer behavior
-        pen_flags = []
-        if os.environ.get("LSTAR_RUN_MAX_PENALTY"):
-            pen_flags += ["--max-penalty", os.environ["LSTAR_RUN_MAX_PENALTY"]]
-        if os.environ.get("LSTAR_RUN_PENALTY"):
-            pen_flags += ["--penalty", os.environ["LSTAR_RUN_PENALTY"]]
-        cmd += pen_flags
+        cmd += ["--learner", runtime_learner]
         cmd += eq_flags
     else:
         # Example usage of your erepair.jar approach
@@ -452,36 +719,46 @@ def repair_and_update_entry(cursor, conn, row):
             print(f"[DEBUG] (ID={id_}, ALG={algorithm}) Running command: {' '.join(str(x) for x in cmd)}")
         # Prepare environment for subprocess (ensure penalty pruning is applied in ec_runtime)
         env = dict(os.environ)
-        if algorithm == "lstar_ec":
-            # Allow override via LSTAR_RUN_MAX_PENALTY; default to 2 if not supplied
-            env.setdefault("LSTAR_MAX_PENALTY", os.environ.get("LSTAR_RUN_MAX_PENALTY", "8"))
+        if algorithm == "betamax":
             # Raise EC parse timeout per attempt unless overridden (set to 100s)
             env.setdefault("LSTAR_PARSE_TIMEOUT", os.environ.get("LSTAR_PARSE_TIMEOUT", "100.0"))
-            cache_p = os.path.join("cache", f"lstar_{base_format}.json")
+            env["BETAMAX_EMIT_METRICS"] = "1"
+            cache_p = cache_path
             if not QUIET:
                 try:
                     sz = os.path.getsize(cache_p) if os.path.exists(cache_p) else 'NA'
-                    print(f"[DEBUG] (ID={id_}, ALG={algorithm}) Cache path: {cache_p}, exists={os.path.exists(cache_p)}, size={sz}, LSTAR_MAX_PENALTY={env.get('LSTAR_MAX_PENALTY')}")
+                    print(f"[DEBUG] (ID={id_}, ALG={algorithm}) Cache path: {cache_p}, exists={os.path.exists(cache_p)}, size={sz}")
                 except Exception as _e:
                     print(f"[DEBUG] (ID={id_}, ALG={algorithm}) Cache stats unavailable: {cache_p}, err={_e}")
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
         local_timeout = REPAIR_TIMEOUT
-        if algorithm == "lstar_ec":
+        if algorithm == "betamax":
             try:
-                local_timeout = int(os.environ.get("LSTAR_EC_TIMEOUT", "600"))
+                if os.environ.get("LSTAR_EC_TIMEOUT"):
+                    local_timeout = int(os.environ["LSTAR_EC_TIMEOUT"])
             except Exception:
                 pass
         if not QUIET:
             print(f"[DEBUG] (ID={id_}, ALG={algorithm}) Timeout set to: {local_timeout}s")
         stdout, stderr = proc.communicate(timeout=local_timeout)
         repair_time = time.time() - start_time
+        return_code = proc.returncode
 
         # Extract oracle info (optional)
         it_o, correct_runs, incorrect_runs, incomplete_runs = extract_oracle_info(stdout)
-        if algorithm == "lstar_ec":
+        if algorithm == "betamax":
             iterations = extract_lstar_attempts(stdout)
+            ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
+            if repair_time > 0:
+                ec_ratio = ec_time / repair_time
+                learn_ratio = learn_time / repair_time
+                oracle_ratio = oracle_time / repair_time
         else:
             iterations = it_o
+            if algorithm == "erepair":
+                oracle_time = extract_oracle_seconds_total(stdout)
+                if repair_time > 0:
+                    oracle_ratio = oracle_time / repair_time
 
         if not QUIET:
             print(f"--- STDOUT (ID={id_}) ---\n{stdout}\n")
@@ -500,8 +777,30 @@ def repair_and_update_entry(cursor, conn, row):
             distance_broken_repaired = levenshtein_distance(broken_text, repaired_text)
             distance_original_repaired = levenshtein_distance(original_text, repaired_text)
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as e:
         print(f"[ERROR] Repair timed out for entry ID={id_}, alg={algorithm}, timeout={local_timeout}s")
+        timed_out = 1
+        repair_time = float(local_timeout)
+        stdout = _ensure_text(getattr(e, "output", None))
+        stderr = _ensure_text(getattr(e, "stderr", None))
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        try:
+            out2, err2 = proc.communicate(timeout=5)
+            stdout += _ensure_text(out2)
+            stderr += _ensure_text(err2)
+        except Exception:
+            pass
+        return_code = proc.returncode if proc.returncode is not None else -9
+        if algorithm == "betamax":
+            iterations = extract_lstar_attempts(stdout)
+            ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
+            if repair_time > 0:
+                ec_ratio = ec_time / repair_time
+                learn_ratio = learn_time / repair_time
+                oracle_ratio = oracle_time / repair_time
     except Exception as e:
         print(f"[ERROR] Repair failed for entry ID={id_}: {e}")
     finally:
@@ -524,20 +823,29 @@ def repair_and_update_entry(cursor, conn, row):
                 pass
             os.remove(neg_file)
 
-    # Update the database record
-    cursor.execute("""
-        UPDATE results
-        SET repaired_text = ?, fixed = ?, iterations = ?, repair_time = ?,
-            correct_runs = ?, incorrect_runs = ?, incomplete_runs = ?,
-            distance_original_broken = ?, distance_broken_repaired = ?, distance_original_repaired = ?
-        WHERE id = ?
-    """, (
-        repaired_text, fixed, iterations, repair_time,
-        correct_runs, incorrect_runs, incomplete_runs,
-        distance_original_broken, distance_broken_repaired, distance_original_repaired,
-        id_
-    ))
-    conn.commit()
+    _update_results_row(
+        cursor,
+        conn,
+        id_=id_,
+        repaired_text=repaired_text,
+        fixed=fixed,
+        iterations=iterations,
+        repair_time=repair_time,
+        correct_runs=correct_runs,
+        incorrect_runs=incorrect_runs,
+        incomplete_runs=incomplete_runs,
+        distance_original_broken=distance_original_broken,
+        distance_broken_repaired=distance_broken_repaired,
+        distance_original_repaired=distance_original_repaired,
+        timed_out=timed_out,
+        return_code=return_code,
+        ec_time=ec_time,
+        ec_ratio=ec_ratio,
+        learn_time=learn_time,
+        learn_ratio=learn_ratio,
+        oracle_time=oracle_time,
+        oracle_ratio=oracle_ratio,
+    )
 
 
 def rerun_repairs_for_selected_formats(db_path: str, selected_formats=None, max_workers=None):
@@ -550,6 +858,8 @@ def rerun_repairs_for_selected_formats(db_path: str, selected_formats=None, max_
 
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    _ensure_results_schema(cursor)
+    conn.commit()
 
     # Fetch entries for the desired formats
     cursor.execute("""
@@ -572,7 +882,7 @@ def rerun_repairs_for_selected_formats(db_path: str, selected_formats=None, max_
         # Honor CLI --algorithms selection; skip entries not requested this run
         if alg not in REPAIR_ALGORITHMS:
             return False
-        if base_f in REGEX_FORMATS and alg not in ("earley", "erepair", "lstar_ec"):
+        if base_f in REGEX_FORMATS and alg not in ("earley", "erepair", "betamax"):
             return False
         return fmt_key in selected_formats
 
@@ -612,15 +922,21 @@ def main():
     parser.add_argument("--db", default=DATABASE_PATH, help="Path to results SQLite DB")
     parser.add_argument("--formats", nargs="+", choices=VALID_FORMATS, help="Formats to include (default: all)")
     parser.add_argument("--mutations", nargs="+", default=MUTATION_TYPES,
-                        help="Either mutation type names (e.g. 'single') or a numeric cap "
+                        help="Either mutation type names (e.g. 'double') or a numeric cap "
                              "that limits how many samples per format to load.")
-    parser.add_argument("--algorithms", nargs="+", choices=REPAIR_ALGORITHMS, help="Override algorithms to run")
+    parser.add_argument("--algorithms", nargs="+", choices=ALL_ALGORITHMS, help="Override algorithms to run")
     parser.add_argument("--resume-only", action="store_true", help="Skip sample insertion, only resume unfinished repairs")
     parser.add_argument("--resume", action="store_true", help="Alias of --resume-only (also skips precompute)")
     parser.add_argument("--max-workers", type=int, help="Max parallel workers (default: cpu count)")
     parser.add_argument("--quiet", action="store_true", help="Reduce console output (suppress per-entry stdout/stderr)")
     parser.add_argument("--limit", type=int, help="Limit number of entries to (re)process")
     parser.add_argument("--pause-on-exit", action="store_true", help="Pause for keypress before exiting")
+    parser.add_argument("--lstar-mutation-count", type=int, default=0,
+                        help="Number of oracle-classified mutations to pre-generate per format for L* pools (0 disables).")
+    parser.add_argument("--lstar-mutation-deterministic", action="store_true",
+                        help="Use deterministic mutation enumeration (default: random sampling).")
+    parser.add_argument("--lstar-mutation-seed", type=int,
+                        help="Optional seed applied to the random sampler (ignored for deterministic mode).")
     args = parser.parse_args()
 
     # Allow "--mutations 20" style usage by separating numeric caps from
@@ -652,14 +968,15 @@ def main():
     # 1) Create or reuse the database
     create_database(db_path)
 
-    # Precompute L* grammar caches for lstar_ec (per format) using first 20 pos/neg
-    if "lstar_ec" in REPAIR_ALGORITHMS and not (args.resume_only or args.resume):
-        os.makedirs("cache", exist_ok=True)
+    # Precompute L* grammar caches for betamax (per format) using first 20 pos/neg
+    if "betamax" in REPAIR_ALGORITHMS:
+        os.makedirs(CACHE_ROOT, exist_ok=True)
+        cache_learner = _cache_betamax_learner()
         for mutation_type in (args.mutations if args.mutations else MUTATION_TYPES):
             for fmt in (args.formats if args.formats else VALID_FORMATS):
                 format_key = f"{mutation_type}_{fmt}"
                 # Use shared cache per format across all bm_* (single/double/triple)
-                cache_path = os.path.join("cache", f"lstar_{fmt}.json")
+                cache_path = _cache_path(fmt, cache_learner)
                 if os.path.exists(cache_path):
                     continue
                 # Pick a source DB for precompute: prefer env LSTAR_CACHE_SOURCE_MUTATION, else fallback to single/double/triple
@@ -678,13 +995,14 @@ def main():
                     pre_k = int(os.environ.get("LSTAR_PRECOMP_K", str(TRAIN_K)))
                     connc = sqlite3.connect(mutation_db_path)
                     curc = connc.cursor()
-                    curc.execute(f"SELECT original_text FROM mutations ORDER BY id LIMIT {pre_k}")
+                    table_name = get_mutation_table_name(mutation_db_path, connc)
+                    curc.execute(f"SELECT original_text FROM {table_name} ORDER BY LENGTH(original_text), id LIMIT {pre_k}")
                     rows = curc.fetchall()
                     with open(pos_file, "w", encoding="utf-8") as pf:
                         for r in rows:
                             line = (r[0] or "").rstrip("\n")
                             pf.write(line + "\n")
-                    curc.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {pre_k}")
+                    curc.execute(f"SELECT mutated_text FROM {table_name} ORDER BY LENGTH(mutated_text), id LIMIT {pre_k}")
                     rows = curc.fetchall()
                     with open(neg_file, "w", encoding="utf-8") as nf:
                         for r in rows:
@@ -692,10 +1010,18 @@ def main():
                             nf.write(line + "\n")
                     connc.close()
                     category = REGEX_DIR_TO_CATEGORY.get(fmt, fmt)
-                    # Prefer validators/regex validator for precompute; allow override via LSTAR_ORACLE_VALIDATOR
+                    # Prefer validators/ (binary) oracle for precompute; allow override via LSTAR_ORACLE_VALIDATOR
                     oracle_override = os.environ.get("LSTAR_ORACLE_VALIDATOR")
+                    oracle_bin = os.path.join("validators", f"validate_{fmt}")
                     oracle_wrapper = os.path.join("validators", "regex", f"validate_{fmt}")
-                    oracle_cmd = oracle_override if oracle_override else (oracle_wrapper if os.path.exists(oracle_wrapper) else None)
+                    if oracle_override:
+                        oracle_cmd = oracle_override
+                    elif os.path.exists(oracle_bin):
+                        oracle_cmd = oracle_bin
+                    elif os.path.exists(oracle_wrapper):
+                        oracle_cmd = oracle_wrapper
+                    else:
+                        oracle_cmd = None
                     cmd = [
                         "python3", "betamax/app/betamax.py",
                         "--positives", pos_file,
@@ -718,20 +1044,14 @@ def main():
                         eq_flags += ["--eq-skip-negatives"]
                     if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
                         eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
-                    learner_pre = os.environ.get("LSTAR_CACHE_LEARNER", os.environ.get("LSTAR_LEARNER", "rpni"))
+                    learner_pre = cache_learner
                     cmd += ["--learner", learner_pre]
-                    # Optional CLI penalties for precompute to strictly enforce max/target penalty
-                    pre_pen = os.environ.get("LSTAR_PRECOMP_MAX_PENALTY")
-                    if pre_pen:
-                        cmd += ["--max-penalty", pre_pen]
-                    if os.environ.get("LSTAR_PRECOMP_PENALTY"):
-                        cmd += ["--penalty", os.environ["LSTAR_PRECOMP_PENALTY"]]
                     cmd += eq_flags
+                    pre_mut = os.environ.get("LSTAR_PRECOMPUTE_MUTATIONS", "60")
+                    cmd += ["--mutations", str(pre_mut)]
                     print(f"[DEBUG] Precompute cache for {format_key}: {' '.join(cmd)} (K={pre_k})")
                     pre_tmo = int(os.environ.get("LSTAR_PRECOMPUTE_TIMEOUT", "600"))
-                    pre_pen = os.environ.get("LSTAR_PRECOMP_MAX_PENALTY", "2")
                     env = dict(os.environ)
-                    env.setdefault("LSTAR_MAX_PENALTY", pre_pen)
                     _t0 = time.time()
                     _res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=pre_tmo, env=env)
                     try:
@@ -747,13 +1067,14 @@ def main():
                         # Rebuild pos/neg with smaller K
                         connc = sqlite3.connect(mutation_db_path)
                         curc = connc.cursor()
-                        curc.execute(f"SELECT original_text FROM mutations ORDER BY id LIMIT {small_k}")
+                        table_name = get_mutation_table_name(mutation_db_path, connc)
+                        curc.execute(f"SELECT original_text FROM {table_name} ORDER BY LENGTH(original_text), id LIMIT {small_k}")
                         rows = curc.fetchall()
                         with open(pos_file, "w", encoding="utf-8") as pf:
                             for r in rows:
                                 line = (r[0] or "").rstrip("\n")
                                 pf.write(line + "\n")
-                        curc.execute(f"SELECT mutated_text FROM mutations ORDER BY id LIMIT {small_k}")
+                        curc.execute(f"SELECT mutated_text FROM {table_name} ORDER BY LENGTH(mutated_text), id LIMIT {small_k}")
                         rows = curc.fetchall()
                         with open(neg_file, "w", encoding="utf-8") as nf:
                             for r in rows:
@@ -783,7 +1104,7 @@ def main():
     if not (args.resume_only or args.resume):
         for mutation_type in args.mutations:
             for fmt in (args.formats if args.formats else VALID_FORMATS):
-                # Construct DB path, e.g., mutated_files/single_dot.db
+                # Construct DB path, e.g., mutated_files/double_dot.db
                 db_name = f"{mutation_type}_{fmt}.db"
                 mutation_db_path = os.path.join("mutated_files", db_name)
 
@@ -794,16 +1115,13 @@ def main():
                 print(f"[INFO] Loading samples from {mutation_db_path}")
                 samples = load_test_samples_from_db(mutation_db_path)
 
-                # Use first TRAIN_K for learning grammar (L*), and next TEST_K as test set
-                # Restrict to at most TRAIN_K + TEST_K entries
                 total_samples = len(samples)
                 if not total_samples:
                     print(f"[INFO] No samples found in '{mutation_db_path}'")
                     continue
 
-                # Respect the TRAIN_K / TEST_K budget when possible, but
-                # gracefully downscale when there are fewer samples than
-                # requested (e.g., --mutations 20).
+                # Use first TRAIN_K for learning grammar (L*), and next TEST_K as test set.
+                # Respect an optional numeric cap (from \"--mutations 20\") if provided.
                 cap = args.sample_cap
                 if cap is not None:
                     budget = min(cap, total_samples)
@@ -815,12 +1133,10 @@ def main():
                         budget = max_budget
 
                 limited = samples[:budget]
-
                 train_limit = min(TRAIN_K, len(limited)) if cap is None else min(TRAIN_K, len(limited))
                 remaining = len(limited) - train_limit
 
                 if remaining <= 0:
-                    # No room for test data; treat everything as test samples.
                     train_limit = 0
                     remaining = len(limited)
 
@@ -834,6 +1150,7 @@ def main():
                 test_samples = limited[train_limit:train_limit + test_limit]
 
                 if test_samples:
+                    # Insert each test sample into the 'results' table for each algorithm
                     format_key = f"{mutation_type}_{fmt}"
                     effective_train = train_limit
                     effective_test = len(test_samples)
@@ -845,6 +1162,15 @@ def main():
 
     # 3) Resume/Run unfinished repairs
     formats_for_rerun = [f"{m}_{f}" for m in args.mutations for f in (args.formats if args.formats else VALID_FORMATS)]
+
+    if LSTAR_MUTATION_POOL:
+        LSTAR_MUTATION_POOL.set_mutation_config(
+            args.lstar_mutation_count,
+            not args.lstar_mutation_deterministic,
+            args.lstar_mutation_seed
+        )
+        LSTAR_MUTATION_POOL.ensure_many(formats_for_rerun)
+
     rerun_repairs_for_selected_formats(db_path, selected_formats=formats_for_rerun, max_workers=args.max_workers)
 
     if PAUSE_ON_EXIT:

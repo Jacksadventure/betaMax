@@ -107,8 +107,6 @@ int main(int argc, char** argv) {
             if (c == '\n') {
                 std::cin.get();
             }
-            // Do NOT trim raw DATA by default; keep behavior consistent with other validators:
-            // existing flow trims input before matching, so do the same here.
             std::string t = trim(data);
             bool match = RE2::FullMatch(t, re);
             std::cout << (match ? "OK" : "ERR") << std::endl;

@@ -5,6 +5,7 @@ import os
 import random
 import sqlite3
 import subprocess
+from typing import Optional
 
 # --------------------------------------------------
 # Global Variables and Configuration
@@ -114,10 +115,22 @@ def repair_test_case(broken_text: str,
         print(f"[ERROR] Repair failed for algorithm '{algorithm}': {e}")
         return ""
 
+def _normalize_for_distance(text: Optional[str]) -> str:
+    """
+    Ignore trailing newline/CR characters so edit distances capture
+    meaningful content differences only.
+    """
+    if text is None:
+        return ""
+    return text.rstrip("\r\n")
+
+
 def levenshtein_distance(a: str, b: str) -> int:
     """
     Computes the Levenshtein distance between strings a and b.
     """
+    a = _normalize_for_distance(a)
+    b = _normalize_for_distance(b)
     if not a:
         return len(b)
     if not b:

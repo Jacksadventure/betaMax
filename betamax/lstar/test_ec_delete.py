@@ -30,7 +30,6 @@ alphabet = ["a", "b"]
 # Build covering grammar with our new <$del[b]> branch available
 cover, start_cov = ec.augment_grammar_ex(g, start, symbols=alphabet)
 parser = ec.ErrorCorrectingEarleyParser(cover)
-parser.max_penalty = 4  # allow some corrections
 
 def run_case(inp: str):
     print("\nCASE input:", repr(inp))
