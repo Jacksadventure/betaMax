@@ -81,17 +81,41 @@ def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
 
 def _runtime_betamax_learner() -> str:
     """Return learner name for runtime BETAMAX invocation."""
-    return os.environ.get("LSTAR_LEARNER",
-                          os.environ.get("BM_BETAMAX_LEARNER",
-                                         "rpni"))
+    raw = os.environ.get("LSTAR_LEARNER",
+                         os.environ.get("BM_BETAMAX_LEARNER",
+                                        "rpni"))
+    return _normalize_learner_name(raw)
 
 
 def _cache_betamax_learner() -> str:
     """Return learner name for cache/precompute steps."""
-    return os.environ.get("LSTAR_CACHE_LEARNER",
-                          os.environ.get("LSTAR_LEARNER",
-                                         os.environ.get("BM_BETAMAX_LEARNER",
-                                                        "rpni_xover")))
+    raw = os.environ.get("LSTAR_CACHE_LEARNER",
+                         os.environ.get("LSTAR_LEARNER",
+                                        os.environ.get("BM_BETAMAX_LEARNER",
+                                                       "rpni_xover")))
+    return _normalize_learner_name(raw)
+
+
+def _normalize_learner_name(name: str) -> str:
+    """
+    Normalize learner identifiers coming from env vars so cache naming and CLI
+    invocation are consistent.
+    """
+    n = (name or "").strip()
+    if not n:
+        return "rpni"
+    aliases = {
+        "xover_rpni": "rpni_xover",
+        "xover-rpni": "rpni_xover",
+        "rpni-xover": "rpni_xover",
+        "nfa_rpni": "rpni_nfa",
+        "nfa-rpni": "rpni_nfa",
+        "fuzz_rpni": "rpni_fuzz",
+        "fuzz-rpni": "rpni_fuzz",
+        "lstar": "lstar_oracle",
+        "lstar-oracle": "lstar_oracle",
+    }
+    return aliases.get(n, n)
 
 # Parser timeout (in seconds)
 VALIDATION_TIMEOUT = 300
@@ -568,7 +592,13 @@ def repair_and_update_entry(cursor, conn, row):
         mutation_type = format_key.split('_')[0]  # e.g., "single"
         category = REGEX_DIR_TO_CATEGORY.get(base_format, base_format)
         runtime_learner = _runtime_betamax_learner()
-        cache_path = _cache_path(base_format, runtime_learner)
+        cache_learner = _cache_betamax_learner()
+        # Intentionally allow cache learner != runtime learner:
+        # - cache (often expensive) provides the initial grammar
+        # - runtime learner (often cheaper) is used for the iterative relearn loop on oracle failure
+        cache_path = _cache_path(base_format, cache_learner)
+        if not os.path.exists(cache_path):
+            cache_path = _cache_path(base_format, runtime_learner)
         pos_file = f"temp_pos_{id_}_{random.randint(0, 9999)}.txt"
         neg_file = f"temp_neg_{id_}_{random.randint(0, 9999)}.txt"
         seed_pos: list[str] = []
