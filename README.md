@@ -6,9 +6,9 @@
 
 betaMax provides:
 
-1. **L\* / RPNI‑based learning core (`betaMax`)**
-   - Uses observation tables and membership/equivalence queries to learn a DFA for a target regular language.
-   - Can combine L\* with RPNI‑style generalisation (see `rpni.py`, `rpni_xover.py`, `rpni_fuzz.py`).
+1. **Repair engine (`betamax`)**
+   - Learns a lightweight acceptor from examples (default: RPNI family learners) to guide repair.
+   - Uses external validators (C++ binaries under `validators/`) as an oracle to confirm candidate repairs.
 
 2. **Repair / validation experiments on real‑world like data**
    - Focus domains include:
@@ -23,7 +23,7 @@ betaMax provides:
    - Scripts to generate mutated (broken) inputs from known valid data.
    - Benchmarks to evaluate how well the learned automata support repair.
 
-The core idea is to **approximate the target language from examples** (via DFA learning) and then explore small edits to broken inputs that move them into the learned language and pass the oracle.
+The core idea is to **learn an approximate model from examples** and then explore small edits to broken inputs, validating promising candidates with the oracle.
 
 ---
 
@@ -52,15 +52,15 @@ Important top‑level files and directories:
   - `mutated_files/` – mutated DB files (single/double/triple/truncated variants) used as broken inputs.
   - `repair_results/` – repair output and logs produced by experiments.
 
-- **L\* learner and core repair engine**
+- **Core engine and learning utilities**
   - `betamax/`
     - `pyproject.toml`, `requirements-local.txt`
+    - `app/betamax.py` – CLI entrypoint (forwards into the implementation under `betamax/lstar/`).
+    - `py/` – vendored wheels used by the runtime (installed via `betamax/requirements-local.txt`).
     - `lstar/`
-      - `betamax.py` – **main L\*‑based repair engine (betaMax core)**.
-      - `observation_table.py` – observation table implementation used by L\*.
-      - `rpni.py`, `rpni_xover.py`, `rpni_fuzz.py` – RPNI and related generalisation / fuzzing utilities.
-      - `ec_runtime.py` – runtime support for experiments.
-      - `README.md` – additional documentation for the L\* library itself.
+      - `betamax.py` – core repair implementation (invoked via `betamax/app/betamax.py`).
+      - `rpni.py`, `rpni_xover.py`, `rpni_fuzz.py`, `rpni_nfa.py` – example-driven learner variants used by the engine.
+      - `ec_runtime.py` – runtime support for experiments (data loading, logging, helpers).
 
 - **Validators**
   - `validators/` – C++ validators and wrappers used as domain‑specific oracles:
@@ -111,7 +111,7 @@ and that file installs a set of local wheels from `betamax/py/`, including:
 
 ## 4. Quick start with betaMax
 
-Below is a typical workflow for running experiments with the main L\*‑based engine. 
+Below is a typical workflow for running experiments with the betaMax engine.
 
 ### 4.1. Warm up and precompute caches
 
@@ -228,7 +228,6 @@ python betamax/app/betamax.py \
 
   ```bash
   --learner rpni           # default (passive RPNI)
-  --learner lstar_oracle   # L* + oracle
   --learner rpni_nfa       # NFA-based RPNI
   --learner rpni_fuzz      # RPNI + fuzz consistency
   --learner rpni_xover     # RPNI + cross-over consistency
@@ -254,8 +253,7 @@ See `betamax/app/betamax.py` docstring and `--help` output for the full list of 
 
 The core engine lives in `betamax/app/betamax.py` and uses several supporting modules:
 
-- `observation_table.py` – maintains the L\* observation table (rows = prefixes, columns = suffixes).
-- `rpni.py` / `rpni_xover.py` – construct and generalise automata from example sets.
+- `rpni.py` / `rpni_xover.py` / `rpni_fuzz.py` / `rpni_nfa.py` – construct and generalise automata from example sets.
 - `ec_runtime.py` – glue code for experiments (loading data, running teachers/oracles, logging).
 
 A typical high‑level flow is:
@@ -265,9 +263,8 @@ A typical high‑level flow is:
    - Optionally read negative examples from `negative/*.txt` (if present) or construct them via mutation.
 
 2. **Learning a DFA**
-   - Construct an observation table from membership queries to an oracle (e.g. the C++ validators).
-   - Repeatedly refine the table until a consistent, closed DFA hypothesis is formed.
-   - Optionally apply RPNI/generalisation to reduce overfitting to the finite sample set.
+   - Construct an automaton from positive examples (and optional negatives), using the selected learner.
+   - Optionally apply generalisation/consistency checks to reduce overfitting to the finite sample set.
 
 3. **Repair / validation**
    - For each broken input (e.g. from `mutated_files/*.db`):
@@ -279,7 +276,7 @@ A typical high‑level flow is:
 For further details, consult the docstrings and comments inside:
 
 - `betamax/app/betamax.py`
-- `betamax/lstar/README.md`
+- `betamax/lstar/betamax.py`
 
 ---
 

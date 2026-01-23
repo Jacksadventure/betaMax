@@ -19,8 +19,8 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
-# Note: runtime dependencies (simplefuzzer, rxfuzzer, etc.) are provided as local wheels in ./py/.
-# Install them via: pip install -r requirements-local.txt
+# Note: runtime dependencies (simplefuzzer, rxfuzzer, etc.) are provided as local wheels under
+# `betamax/py/` (from the repo root). Install them via: pip install -r requirements.txt
 # We intentionally do not declare them here to avoid failing pip installs outside this repo.
 
 [tool.setuptools.packages.find]

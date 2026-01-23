@@ -1,14 +1,14 @@
 # Local wheels used by lstar package (paths relative to repo root)
 # Primary runtime deps
-py/simplefuzzer-0.0.1-py2.py3-none-any.whl
-py/rxfuzzer-0.0.1-py2.py3-none-any.whl
-py/earleyparser-0.0.1-py2.py3-none-any.whl
-py/cfgrandomsample-0.0.1-py2.py3-none-any.whl
-py/cfgremoveepsilon-0.0.1-py2.py3-none-any.whl
+betamax/py/simplefuzzer-0.0.1-py2.py3-none-any.whl
+betamax/py/rxfuzzer-0.0.1-py2.py3-none-any.whl
+betamax/py/earleyparser-0.0.1-py2.py3-none-any.whl
+betamax/py/cfgrandomsample-0.0.1-py2.py3-none-any.whl
+betamax/py/cfgremoveepsilon-0.0.1-py2.py3-none-any.whl
 
 # Transitive/runtime helpers (safe to include)
-py/graphviz-0.16-py2.py3-none-any.whl
-py/pyparsing-2.4.7-py2.py3-none-any.whl
-py/pydot-1.4.1-py2.py3-none-any.whl
-py/sympy-1.8-py3-none-any.whl
-py/mpmath-1.2.1-py3-none-any.whl
+betamax/py/graphviz-0.16-py2.py3-none-any.whl
+betamax/py/pyparsing-2.4.7-py2.py3-none-any.whl
+betamax/py/pydot-1.4.1-py2.py3-none-any.whl
+betamax/py/sympy-1.8-py3-none-any.whl
+betamax/py/mpmath-1.2.1-py3-none-any.whl
