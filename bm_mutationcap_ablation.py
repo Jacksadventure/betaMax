@@ -39,7 +39,7 @@ DEFAULT_SCRIPTS = {
     "double": "bm_multiple.py",
     "triple": "bm_triple.py",
 }
-DEFAULT_FORMATS = ["date", "time", "url", "isbn", "ipv4", "ipv6"]
+DEFAULT_FORMATS = ["date", "iso8601", "time", "url", "isbn", "ipv4", "ipv6"]
 DEFAULT_DB_TEMPLATE = "{mode}_m{cap}.db"
 
 

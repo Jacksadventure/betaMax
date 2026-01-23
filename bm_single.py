@@ -34,6 +34,7 @@ PROJECT_PATHS = {
     "c": "project/erepair-subjects/tiny/tiny",
     # Regex-based categories use match.py as oracle command string
     "date": "python3 match.py Date",
+    "iso8601": "python3 match.py ISO8601",
     "time": "python3 match.py Time",
     "url":  "python3 match.py URL",
     "isbn": "python3 match.py ISBN",
@@ -44,6 +45,7 @@ PROJECT_PATHS = {
 # Mapping for regex-based categories
 REGEX_DIR_TO_CATEGORY = {
     "date": "Date",
+    "iso8601": "ISO8601",
     "time": "Time",
     "url": "URL",
     "isbn": "ISBN",
@@ -53,7 +55,7 @@ REGEX_DIR_TO_CATEGORY = {
 REGEX_FORMATS = set(REGEX_DIR_TO_CATEGORY.keys())
 
 # Valid formats/folders to process
-VALID_FORMATS = ["date", "time", "isbn", "ipv4", "ipv6", "url"]
+VALID_FORMATS = ["date", "time", "isbn", "ipv4", "url", "ipv6"]
 
 
 MUTATION_TYPES = ["single"]

@@ -10,6 +10,7 @@ BASE="$(basename "$0")"
 
 case "$BASE" in
   validate_date*) CATEGORY="Date" ;;
+  validate_iso8601*) CATEGORY="ISO8601" ;;
   validate_time*) CATEGORY="Time" ;;
   validate_url*) CATEGORY="URL" ;;
   validate_isbn*) CATEGORY="ISBN" ;;
@@ -28,7 +29,7 @@ if [ $# -ne 1 ]; then
 fi
 
 # Strict mode for repair oracles: require full match (exit 0), partial (-1→255) is NOT success.
-if [ -x "$SCRIPT_DIR/match_re2" ]; then
+if [ "$CATEGORY" != "ISO8601" ] && [ -x "$SCRIPT_DIR/match_re2" ]; then
   exec "$SCRIPT_DIR/match_re2" "$CATEGORY" "$1"
 else
   exec python3 "$SCRIPT_DIR/../match.py" "$CATEGORY" "$1"

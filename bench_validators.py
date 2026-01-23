@@ -27,6 +27,7 @@ from typing import Iterable
 
 FORMAT_TO_CATEGORY: dict[str, str] = {
     "date": "Date",
+    "iso8601": "ISO8601",
     "time": "Time",
     "url": "URL",
     "isbn": "ISBN",
@@ -167,4 +168,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

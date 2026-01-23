@@ -31,9 +31,10 @@ from bm_lstar_mutations import get_mutation_table_name
 # Defaults
 # ------------------------------------------------------------------------------
 
-VALID_FORMATS = ["date", "time", "isbn", "ipv4", "ipv6", "url"]
+VALID_FORMATS = ["date", "iso8601", "time", "isbn", "ipv4", "ipv6", "url"]
 REGEX_DIR_TO_CATEGORY = {
     "date": "Date",
+    "iso8601": "ISO8601",
     "time": "Time",
     "url": "URL",
     "isbn": "ISBN",

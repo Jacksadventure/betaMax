@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CPP_VALIDATOR="$SCRIPT_DIR/../validate_iso8601"
+
+if [ $# -ne 1 ]; then
+  echo "Usage: $(basename "$0") <file_path>" >&2
+  exit 2
+fi
+
+if [ -x "$CPP_VALIDATOR" ]; then
+  exec "$CPP_VALIDATOR" "$1"
+fi
+
+exec python3 "$SCRIPT_DIR/../../match.py" "ISO8601" "$1"

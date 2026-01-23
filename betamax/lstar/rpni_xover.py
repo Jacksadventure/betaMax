@@ -25,6 +25,11 @@ negative-sample check.
 
 A budget of cross-over oracle queries is enforced, so at most *n* new
 membership checks are performed per merge attempt.
+
+NOTE: This implementation is intentionally simplified to run a single
+cross-over check per merge attempt: it uses one prefix from the "before"
+state and one suffix from the "after" state to form a single candidate
+string for the external membership oracle.
 Existing learners remain untouched; betamax.py can import this as an
 additional --learner option (e.g. 'rpni_xover').
 """
@@ -33,7 +38,6 @@ from __future__ import annotations
 from typing import Callable, Dict, Iterable, List, Tuple, Optional, Set
 from collections import defaultdict
 import os
-import random
 
 from .rpni import RPNI, DFA, dfa_to_right_linear_grammar
 
@@ -88,7 +92,8 @@ class XoverRPNI(RPNI):
             max_checks = 2
 
         # max_pairs: per-merge cap on |pos_r| × |pos_b| combinations
-        # (0 => disable cross-over checks entirely).
+        # (0 => disable cross-over checks entirely). In this simplified
+        # implementation, values > 0 just mean "enabled".
         self._max_pairs: int = max(0, max_pairs)
         # max_checks: per-merge cap on oracle membership calls
         # (0 => disable both cross-over and negative checks).
@@ -165,56 +170,6 @@ class XoverRPNI(RPNI):
     # Helpers for Algorithm 2
     # ------------------------------------------------------------------
 
-    def _nodes_for_roots(
-        self,
-        rep: List[int],
-        roots: Tuple[int, int],
-    ) -> Dict[int, List[int]]:
-        """Group PTA nodes according to their current DFA representative.
-
-        Given the union-find representative array `rep` and two roots
-        (red/blue), return a mapping {root -> [nodes]} where each list
-        contains all PTA nodes whose representative is that root.
-        """
-        groups: Dict[int, List[int]] = {root: [] for root in roots}
-        for node in range(len(rep)):
-            root = self._find(rep, node)
-            if root in groups:
-                groups[root].append(node)
-        return groups
-
-    def _collect_positive_pairs(self, nodes: List[int]) -> List[Tuple[str, str]]:
-        """Collect distinct (prefix, suffix) pairs for positives through `nodes`."""
-        acc: List[Tuple[str, str]] = []
-        seen: Set[Tuple[str, str]] = set()
-        for node in nodes:
-            suffixes = self._pos_suffixes.get(node)
-            if not suffixes:
-                continue
-            prefix = self._node_prefix[node]
-            for suffix in suffixes:
-                pair = (prefix, suffix)
-                if pair in seen:
-                    continue
-                seen.add(pair)
-                acc.append(pair)
-        return acc
-
-    def _collect_negative_candidates(self, nodes: List[int]) -> List[str]:
-        """Collect distinct negative strings that pass through any of `nodes`."""
-        acc: List[str] = []
-        seen: Set[str] = set()
-        for node in nodes:
-            entries = self._negatives_by_node.get(node)
-            if not entries:
-                continue
-            for w in entries:
-                if w in seen:
-                    continue
-                seen.add(w)
-                acc.append(w)
-        return acc
-
     def _oracle_accepts(self, word: str) -> Optional[bool]:
         """Query the external oracle with caching.
 
@@ -243,15 +198,13 @@ class XoverRPNI(RPNI):
 
         For the two DFA states with representatives `qr` and `qb`:
 
-          1. Collect all PTA nodes currently mapped to each root;
-          2. From those nodes, extract (prefix, suffix) pairs for
-             positive samples and build cross-over candidates:
-                p(x_i)·s(x_j) and p(x_j)·s(x_i);
-             Reject the merge if the oracle says any candidate is
-             *outside* the target language;
-          3. Collect all negative samples that pass through any of the
-             nodes mapped to either root and reject the merge if the
-             oracle classifies any of them as positive.
+          1. Build a single cross-over candidate from the merge points:
+               p(qr) · s(qb)
+             using one prefix from state `qr` and one suffix from state
+             `qb`, then reject if the oracle says it is outside the
+             target language;
+          2. Check negatives that pass through either merge-point state
+             and reject if the oracle classifies any of them as positive.
 
         A per-merge budget of `self._max_cross_checks` oracle calls is
         enforced; once exhausted, no further candidates are queried and
@@ -277,72 +230,41 @@ class XoverRPNI(RPNI):
         if root_r == root_b:
             return True
 
-        groups = self._nodes_for_roots(rep, (root_r, root_b))
-        nodes_r = groups.get(root_r, [])
-        nodes_b = groups.get(root_b, [])
-
         # ------------------------------
         # 1) Cross-over from positives
         # ------------------------------
-        pos_r = self._collect_positive_pairs(nodes_r)
-        pos_b = self._collect_positive_pairs(nodes_b)
-
-        if pos_r and pos_b and budget > 0:
-            seen_words: Set[str] = set()
-            total_pairs = len(pos_r) * len(pos_b)
-            if self._max_pairs > 0:
-                sample_size = min(self._max_pairs, total_pairs)
-                pair_indices = random.sample(range(total_pairs), sample_size)
-            else:
-                pair_indices = range(total_pairs)
-
-            width = len(pos_b)
-
-            for idx in pair_indices:
-                if budget <= 0:
-                    break
-                i, j = divmod(idx, width)
-                pref_r, suf_r = pos_r[i]
-                pref_b, suf_b = pos_b[j]
-
-                # Two cross-over candidates: p_r·s_b and p_b·s_r.
-                for cand in (pref_r + suf_b, pref_b + suf_r):
-                    if budget <= 0:
-                        break
-                    if cand in seen_words:
-                        continue
-                    seen_words.add(cand)
-
-                    verdict = self._oracle_accepts(cand)
-                    budget -= 1
-
-                    # If the oracle explicitly says "not in language",
-                    # this merge violates Algorithm 2.
-                    if verdict is False:
-                        return False
+        if budget > 0:
+            prefix = self._node_prefix[qr] if 0 <= qr < len(self._node_prefix) else ""
+            suffixes = self._pos_suffixes.get(qb) or []
+            suffix = suffixes[0] if suffixes else ""
+            cand = prefix + suffix
+            if cand:
+                verdict = self._oracle_accepts(cand)
+                budget -= 1
+                if verdict is False:
+                    return False
 
         # ------------------------------
         # 2) Negatives must stay negative
         # ------------------------------
-        neg_candidates = self._collect_negative_candidates(nodes_r)
-        neg_candidates += self._collect_negative_candidates(nodes_b)
+        if budget > 0:
+            neg_candidates = (self._negatives_by_node.get(qr) or []) + (self._negatives_by_node.get(qb) or [])
+            if neg_candidates:
+                seen_neg: Set[str] = set()
+                for cand in neg_candidates:
+                    if budget <= 0:
+                        break
+                    if cand in seen_neg:
+                        continue
+                    seen_neg.add(cand)
 
-        if neg_candidates and budget > 0:
-            seen_neg: Set[str] = set()
-            for cand in neg_candidates:
-                if budget <= 0:
-                    break
-                if cand in seen_neg:
-                    continue
-                seen_neg.add(cand)
+                    verdict = self._oracle_accepts(cand)
+                    budget -= 1
 
-                verdict = self._oracle_accepts(cand)
-                budget -= 1
-
-                # If the oracle says this negative is actually in the language,
-                # we reject the merge.
-                if verdict is True:
-                    return False
+                    # If the oracle says this negative is actually in the language,
+                    # we reject the merge.
+                    if verdict is True:
+                        return False
 
         # No violation observed within the budget.
         return True
@@ -387,7 +309,7 @@ def learn_grammar_from_samples_xover(
     Cross-over exploration limits can be controlled via arguments or
     environment variables:
 
-        LSTAR_RPNI_XOVER_PAIRS   (default: 50, 0 disables checks)
+        LSTAR_RPNI_XOVER_PAIRS   (default: 50, 0 disables checks; >0 enables)
         LSTAR_RPNI_XOVER_CHECKS  (default: 10 oracle queries per merge)
     """
     if max_pairs is None:

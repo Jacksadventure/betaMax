@@ -31,7 +31,7 @@ from typing import List
 DEFAULT_TRAIN_SIZES = [25, 12, 6]
 DEFAULT_TEST_K = 50
 DEFAULT_ALGORITHMS = ["betamax"]
-DEFAULT_FORMATS = ["date", "time", "url", "isbn", "ipv4", "ipv6"]
+DEFAULT_FORMATS = ["date", "iso8601", "time", "url", "isbn", "ipv4", "ipv6"]
 DEFAULT_MODES = ["single", "double", "triple"]
 DEFAULT_SCRIPTS = {
     "single": "bm_single.py",

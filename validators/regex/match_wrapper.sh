@@ -10,6 +10,7 @@ BASE="$(basename "$0")"
 
 case "$BASE" in
   validate_date*) CATEGORY="Date" ;;
+  validate_iso8601*) CATEGORY="ISO8601" ;;
   validate_time*) CATEGORY="Time" ;;
   validate_url*) CATEGORY="URL" ;;
   validate_isbn*) CATEGORY="ISBN" ;;

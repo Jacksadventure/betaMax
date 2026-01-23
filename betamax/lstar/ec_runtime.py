@@ -67,7 +67,10 @@ def add_start(old_start: str) -> Tuple[Dict[str, List[List[str]]], str]:
     """
     g_: Dict[str, List[List[str]]] = {}
     c_start = corrupt_start(old_start)
-    g_[c_start] = [[old_start]]
+    # Also allow consuming trailing junk in the broken input (via Any_plus -> '$.'+).
+    # This keeps EC parsing total (so parse_prefix can reach len(text)) while
+    # SimpleExtractorEx prefers the length-preserving alternative when possible.
+    g_[c_start] = [[old_start], [old_start, Any_plus]]
     return g_, c_start
 
 def augment_grammar_ex(g: Dict[str, List[List[str]]], start: str, symbols: List[str] = None) -> Tuple[Dict[str, List[List[str]]], str]:
@@ -275,6 +278,39 @@ class ErrorCorrectingEarleyParser(ErrorCorrectingEarleyParser):
 
     def create_state(self, sym, alt, num, col):
         return ECState(sym, alt, num, col)
+
+    def parse_prefix(self, text, start_symbol):
+        """
+        Like earleyparser.EarleyParser.parse_prefix(), but tolerant of our scan-time
+        mutation of extended terminals (e.g., '$.' / '!x') into concrete symbols.
+        """
+        alts = [tuple(alt) for alt in self._grammar[start_symbol]]
+        self.table = self.chart_parse(text, start_symbol, alts)
+
+        def _compatible(expr, alt):
+            if len(expr) != len(alt):
+                return False
+            for alt_sym, expr_sym in zip(alt, expr):
+                if alt_sym == expr_sym:
+                    continue
+                if alt_sym == Any_term:
+                    continue
+                if isinstance(alt_sym, str) and len(alt_sym) > 1 and alt_sym[0] == Any_not_term[0]:
+                    if len(alt_sym) > 1 and expr_sym != alt_sym[1]:
+                        continue
+                return False
+            return True
+
+        for col in reversed(self.table):
+            states = [
+                st for st in col.states
+                if st.name == start_symbol
+                and st.s_col.index == 0
+                and any(_compatible(st.expr, alt) for alt in alts)
+            ]
+            if states:
+                return col.index, states
+        return -1, []
 
 class SimpleExtractor:
     """
