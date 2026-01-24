@@ -1270,7 +1270,7 @@ def plot_rpni_success_vs_iterations():
         "triple.db": "3-mutations",
     }
 
-    PLOT_MAX_T = 200
+    PLOT_MAX_T = 30
 
     for db in DATABASES:
         if not Path(db).is_file():

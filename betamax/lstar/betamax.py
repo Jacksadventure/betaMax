@@ -673,13 +673,14 @@ def validate_with_match(category: str, text: str, validator_cmd: Optional[List[s
                 # Fallback to Python validator
                 cmd = ["python3", "match.py", category, temp_path]
 
-        # Show input preview and command
-        try:
-            preview = text if len(text) <= 200 else (text[:200] + "...(truncated)")
-        except Exception:
-            preview = "<unprintable>"
-        print(f"[DEBUG] Oracle in: {repr(preview)} (len={len(text)})")
-        print(f"[DEBUG] Oracle cmd: {' '.join(cmd)}")
+        debug_oracle = os.environ.get("BETAMAX_DEBUG_ORACLE", "").lower() in ("1", "true", "yes")
+        if debug_oracle:
+            try:
+                preview = text if len(text) <= 200 else (text[:200] + "...(truncated)")
+            except Exception:
+                preview = "<unprintable>"
+            print(f"[DEBUG] Oracle in: {repr(preview)} (len={len(text)})")
+            print(f"[DEBUG] Oracle cmd: {' '.join(cmd)}")
 
         # Run oracle with timeout and show outputs; treat hang as reject
         try:
@@ -696,22 +697,27 @@ def validate_with_match(category: str, text: str, validator_cmd: Optional[List[s
             )
             out = (res.stdout or "").strip()
             err = (res.stderr or "").strip()
-            if out:
-                print(f"[DEBUG] Oracle out: {out}")
-            if err:
-                print(f"[DEBUG] Oracle err: {err}")
-            print(f"[DEBUG] Oracle rc: {res.returncode}")
-            verdict = (res.returncode == 0)
-            print(f"[DEBUG] Oracle verdict: {'OK' if verdict else 'FAIL'}")
+            if debug_oracle:
+                if out:
+                    print(f"[DEBUG] Oracle out: {out}")
+                if err:
+                    print(f"[DEBUG] Oracle err: {err}")
+                print(f"[DEBUG] Oracle rc: {res.returncode}")
+                verdict = (res.returncode == 0)
+                print(f"[DEBUG] Oracle verdict: {'OK' if verdict else 'FAIL'}")
+            else:
+                verdict = (res.returncode == 0)
             return verdict
         except subprocess.TimeoutExpired:
-            try:
-                print(f"[WARN] Oracle timed out after {oracle_timeout:.2f}s; treating as REJECT and skipping.")
-            except Exception:
-                print("[WARN] Oracle timed out; treating as REJECT and skipping.")
+            if debug_oracle:
+                try:
+                    print(f"[WARN] Oracle timed out after {oracle_timeout:.2f}s; treating as REJECT and skipping.")
+                except Exception:
+                    print("[WARN] Oracle timed out; treating as REJECT and skipping.")
             return False
         except Exception as e:
-            print(f"[WARN] Oracle execution error: {e}; treating as REJECT.")
+            if debug_oracle:
+                print(f"[WARN] Oracle execution error: {e}; treating as REJECT.")
             return False
     finally:
         try:
@@ -749,6 +755,8 @@ def main():
     ap.add_argument("--ec-enumerate", action="store_true", help="Enumerate ALL repair candidates in a single EC run")
     ap.add_argument("--ec-limit", type=int, help="Optional cap on number of candidates enumerated per input to avoid explosion")
     ap.add_argument("--accumulate-negatives-round", action="store_true", help="Accumulate failing broken inputs across a full pass, then relearn once (batch rounds)")
+    ap.add_argument("--no-broken-negative", action="store_true",
+                    help="Do not add the broken input itself to the negative set during relearning (benchmark-friendly).")
     ap.add_argument("--mutations", type=int, default=20, help="Number of mutated samples to generate from positives using only existing characters")
     ap.add_argument("--mutations-random", action="store_true", help="Generate mutations randomly (instead of deterministic enumeration)")
     ap.add_argument("--mutations-deterministic", action="store_true", help="Force deterministic mutation enumeration (overrides --mutations-random)")
@@ -986,7 +994,8 @@ def main():
         while attempt <= args.max_attempts and not cur_ok:
             if last_fixed:
                 teacher_negatives.add(last_fixed)
-            teacher_negatives.add(broken)
+            if not getattr(args, "no_broken_negative", False):
+                teacher_negatives.add(broken)
             print(f"[INFO] Re-learning with {len(teacher_negatives)} negative(s) (attempt {attempt}/{args.max_attempts}) ...")
             try:
                 t_learn0 = time.time()

@@ -70,6 +70,11 @@ LSTAR_MUTATION_POOL = LStarMutationPool(TRAIN_K, REGEX_FORMATS, REGEX_DIR_TO_CAT
 CACHE_ROOT = os.environ.get("LSTAR_CACHE_ROOT", "cache")
 os.makedirs(CACHE_ROOT, exist_ok=True)
 
+# Whether to use mutated_text pulled from mutated_files/*.db as negatives.
+# Default is off because mutated_text can include oracle-accepted strings and
+# "broken DB strings" are often not reliable negatives for learning.
+BM_NEGATIVES_FROM_DB = os.environ.get("BM_NEGATIVES_FROM_DB", "0").lower() in ("1", "true", "yes")
+
 
 def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
     """
@@ -666,7 +671,12 @@ def repair_and_update_entry(cursor, conn, row):
             neg_lines: list[str] = []
             if seed_neg:
                 neg_lines = [(s or "").rstrip("\n") for s in seed_neg]
-            if not neg_lines:
+            if mut_neg:
+                extra_neg = [(s or "").rstrip("\n") for s in mut_neg]
+                neg_lines.extend(extra_neg)
+                if not QUIET:
+                    print(f"[DEBUG] (ID={id_}) Added {len(extra_neg)} mutation negatives to pool.")
+            if not neg_lines and BM_NEGATIVES_FROM_DB:
                 mdb_path = os.path.join("mutated_files", f"{format_key}.db")
                 with sqlite3.connect(mdb_path) as conn3:
                     table_name = get_mutation_table_name(mdb_path, conn3)
@@ -674,11 +684,6 @@ def repair_and_update_entry(cursor, conn, row):
                     cur3.execute(f"SELECT mutated_text FROM {table_name} ORDER BY LENGTH(mutated_text), id LIMIT {K}")
                     rows = cur3.fetchall()
                 neg_lines = [(r[0] or "").rstrip("\n") for r in rows]
-            if mut_neg:
-                extra_neg = [(s or "").rstrip("\n") for s in mut_neg]
-                neg_lines.extend(extra_neg)
-                if not QUIET:
-                    print(f"[DEBUG] (ID={id_}) Added {len(extra_neg)} mutation negatives to pool.")
             with open(neg_file, "w", encoding="utf-8") as nf:
                 for line in neg_lines:
                     nf.write(line + "\n")
@@ -718,6 +723,8 @@ def repair_and_update_entry(cursor, conn, row):
             "--max-attempts", str(attempts),
             # Avoid betamax's default mutation augmentation during benchmarks.
             "--mutations", "60",
+            # Do not add the broken DB input itself to negatives during relearn.
+            "--no-broken-negative",
         ]
         if oracle_cmd:
             cmd += ["--oracle-validator", oracle_cmd]
@@ -1032,12 +1039,13 @@ def main():
                         for r in rows:
                             line = (r[0] or "").rstrip("\n")
                             pf.write(line + "\n")
-                    curc.execute(f"SELECT mutated_text FROM {table_name} ORDER BY LENGTH(mutated_text), id LIMIT {pre_k}")
-                    rows = curc.fetchall()
                     with open(neg_file, "w", encoding="utf-8") as nf:
-                        for r in rows:
-                            line = (r[0] or "").rstrip("\n")
-                            nf.write(line + "\n")
+                        if BM_NEGATIVES_FROM_DB:
+                            curc.execute(f"SELECT mutated_text FROM {table_name} ORDER BY LENGTH(mutated_text), id LIMIT {pre_k}")
+                            rows = curc.fetchall()
+                            for r in rows:
+                                line = (r[0] or "").rstrip("\n")
+                                nf.write(line + "\n")
                     connc.close()
                     category = REGEX_DIR_TO_CATEGORY.get(fmt, fmt)
                     # Prefer validators/ (binary) oracle for precompute; allow override via LSTAR_ORACLE_VALIDATOR

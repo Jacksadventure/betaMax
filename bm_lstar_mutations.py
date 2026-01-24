@@ -105,6 +105,7 @@ class LStarMutationPool:
         mdb_path = os.path.join("mutated_files", f"{format_key}.db")
         positives: List[str] = []
         negatives: List[str] = []
+        use_db_negatives = os.environ.get("BM_NEGATIVES_FROM_DB", "0").lower() in ("1", "true", "yes")
         if not os.path.exists(mdb_path):
             print(f"[INFO] Mutation DB missing for {format_key}, skipping seed pool.")
             self.seed_pools[format_key] = {"positives": positives, "negatives": negatives}
@@ -121,13 +122,14 @@ class LStarMutationPool:
                 LIMIT ?
             """, (self.train_k,))
             positives = [(row[0] or "") for row in cur.fetchall()]
-            cur.execute(f"""
-                SELECT mutated_text
-                FROM {table_name}
-                ORDER BY LENGTH(mutated_text), id
-                LIMIT ?
-            """, (self.train_k,))
-            negatives = [(row[0] or "") for row in cur.fetchall()]
+            if use_db_negatives:
+                cur.execute(f"""
+                    SELECT mutated_text
+                    FROM {table_name}
+                    ORDER BY LENGTH(mutated_text), id
+                    LIMIT ?
+                """, (self.train_k,))
+                negatives = [(row[0] or "") for row in cur.fetchall()]
             print(f"[INFO] Seed pool for {format_key}: +{len(positives)} / -{len(negatives)}")
         except Exception as exc:
             print(f"[WARN] Failed to load mutation seed pool for {format_key}: {exc}")
