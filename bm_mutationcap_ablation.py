@@ -9,12 +9,12 @@ This script sets `LSTAR_PRECOMPUTE_MUTATIONS=<N>` for each run; the bm_* scripts
 use it only in the precompute step (grammar cache init), while the actual repair
 benchmark continues to use its own hard-coded `--mutations` setting.
 
-Default runs: caps {20, 40, 80} × modes {single, double, triple} = 9 runs.
+Default runs: caps {0, 80, 100} × modes {single, double, triple} = 9 runs.
 Each run writes to its own SQLite database: {mode}_m{cap}.db
 Between runs, the LSTAR cache directory is deleted once.
 
 Example:
-    python3 bm_mutationcap_ablation.py --formats date time --caps 20 40 80
+    python3 bm_mutationcap_ablation.py --formats date time --caps 0 80 100
 
 Pass extra args to underlying bm_* scripts after "--":
     python3 bm_mutationcap_ablation.py -- --limit 10
@@ -30,7 +30,7 @@ import sys
 from typing import List
 
 
-DEFAULT_CAPS = [0,20,40,80,100]
+DEFAULT_CAPS = [0,80,100]
 DEFAULT_MODES = ["single", "double", "triple"]
 DEFAULT_TEST_K = 50
 DEFAULT_TRAIN_K = 50
@@ -195,8 +195,8 @@ def main() -> int:
 
     caps: List[int] = []
     for c in args.caps:
-        if c <= 0:
-            print(f"[WARN] Ignoring non-positive cap={c}")
+        if c < 0:
+            print(f"[WARN] Ignoring negative cap={c}")
             continue
         caps.append(c)
     if not caps:
