@@ -91,3 +91,6 @@ project/repair_results/
 # Backup & misc
 *.orig
 *.rej
+
+#pics
+.png

@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 # NOTE: these must be exported; otherwise bm_* subprocesses won't see them and
 # will fall back to their internal defaults (e.g., LSTAR_PARSE_TIMEOUT=100s).
-export LSTAR_PRECOMPUTE_TIMEOUT=1800
+# Precompute step timeout in seconds (set to 0 to disable timeout).
+export LSTAR_PRECOMPUTE_TIMEOUT="${LSTAR_PRECOMPUTE_TIMEOUT:-18000}"
 
 # Two-stage strategy:
 # 1) Precompute a strong cache grammar with `rpni_xover` (expensive, done once per format).
@@ -13,12 +14,12 @@ export LSTAR_PRECOMPUTE_TIMEOUT=1800
 #    fall back to cheaper `rpni` for the iterative loop.
 #
 # Valid values (see `betamax/lstar/betamax.py`): rpni, rpni_nfa, rpni_fuzz, rpni_xover, lstar_oracle
-export LSTAR_CACHE_LEARNER="${LSTAR_CACHE_LEARNER:-rpni_xover}"
+export LSTAR_CACHE_LEARNER="${LSTAR_CACHE_LEARNER:-rpni}"
 export LSTAR_LEARNER="${LSTAR_LEARNER:-rpni}"
 
 export LSTAR_PARSE_TIMEOUT=600
 export LSTAR_EC_TIMEOUT=600
-export LSTAR_PRECOMPUTE_MUTATIONS=40
+export LSTAR_PRECOMPUTE_MUTATIONS=60
 export BM_NEGATIVES_FROM_DB="${BM_NEGATIVES_FROM_DB:-0}"
 export BETAMAX_DEBUG_ORACLE="${BETAMAX_DEBUG_ORACLE:-0}"
 
@@ -50,6 +51,7 @@ if [[ "$missing_db" != "0" && "${BM_ALLOW_MISSING_MUTATED:-0}" != "1" ]]; then
   exit 1
 fi
 
-"$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT"
-"$PYTHON_BIN" "bm_multiple.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT"
-"$PYTHON_BIN" "bm_triple.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT"
+# "$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT"
+"$PYTHON_BIN" "bm_single.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats ipv4
+"$PYTHON_BIN" "bm_multiple.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats ipv4
+"$PYTHON_BIN" "bm_triple.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats ipv4

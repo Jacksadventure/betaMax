@@ -722,9 +722,7 @@ def repair_and_update_entry(cursor, conn, row):
             "--output-file", output_file,
             "--max-attempts", str(attempts),
             # Avoid betamax's default mutation augmentation during benchmarks.
-            "--mutations", "60",
-            # Do not add the broken DB input itself to negatives during relearn.
-            "--no-broken-negative",
+            "--mutations", "60"
         ]
         if oracle_cmd:
             cmd += ["--oracle-validator", oracle_cmd]
@@ -1091,7 +1089,11 @@ def main():
                     pre_tmo = int(os.environ.get("LSTAR_PRECOMPUTE_TIMEOUT", "600"))
                     env = dict(os.environ)
                     _t0 = time.time()
-                    _res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=pre_tmo, env=env)
+                    run_kwargs = dict(stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+                    # Allow disabling timeout via LSTAR_PRECOMPUTE_TIMEOUT=0
+                    if pre_tmo > 0:
+                        run_kwargs["timeout"] = pre_tmo
+                    _res = subprocess.run(cmd, **run_kwargs)
                     try:
                         _sz = os.path.getsize(cache_path) if os.path.exists(cache_path) else "NA"
                         _dt = time.time() - _t0
@@ -1120,7 +1122,7 @@ def main():
                                 nf.write(line + "\n")
                         connc.close()
                         print(f"[DEBUG] Retry precompute cache for {format_key} with K={small_k}")
-                        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=pre_tmo, env=env)
+                        subprocess.run(cmd, **run_kwargs)
                     except subprocess.TimeoutExpired:
                         print(f"[WARN] Precompute second timeout for {format_key}, skipping.")
                     except Exception as e2:

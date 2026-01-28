@@ -30,10 +30,12 @@ import sys
 from typing import List
 
 
-DEFAULT_CAPS = [80,100,120]
+DEFAULT_CAPS = [0,20,40,80,100]
 DEFAULT_MODES = ["single", "double", "triple"]
 DEFAULT_TEST_K = 50
 DEFAULT_TRAIN_K = 50
+DEFAULT_CACHE_LEARNER = "rpni_xover"
+DEFAULT_RUNTIME_LEARNER = "rpni"
 DEFAULT_SCRIPTS = {
     "single": "bm_single.py",
     "double": "bm_multiple.py",
@@ -72,6 +74,16 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_TEST_K,
         help="BM_TEST_K env var (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--cache-learner",
+        default=DEFAULT_CACHE_LEARNER,
+        help="Learner used for precompute cache init (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--runtime-learner",
+        default=DEFAULT_RUNTIME_LEARNER,
+        help="Learner used during the repair/relearn loop (default: %(default)s).",
     )
     parser.add_argument(
         "--db-template",
@@ -194,6 +206,15 @@ def main() -> int:
     cache_root = args.cache_root
     os.makedirs(cache_root, exist_ok=True)
 
+    cache_learner = (args.cache_learner or "").strip()
+    runtime_learner = (args.runtime_learner or "").strip()
+    if not cache_learner:
+        print("[ERROR] --cache-learner is empty.", file=sys.stderr)
+        return 1
+    if not runtime_learner:
+        print("[ERROR] --runtime-learner is empty.", file=sys.stderr)
+        return 1
+
     # Run order: for each cap, run modes in the order requested.
     for cap in caps:
         for mode in args.modes:
@@ -210,9 +231,16 @@ def main() -> int:
             env["BM_TEST_K"] = str(args.test_k)
             env["LSTAR_CACHE_ROOT"] = cache_root
             env["LSTAR_PRECOMPUTE_MUTATIONS"] = str(cap)
+            # Two-stage setup:
+            # - bm_* precompute uses LSTAR_CACHE_LEARNER to initialize the grammar cache
+            # - per-sample repairs use LSTAR_LEARNER (and BM_BETAMAX_LEARNER) for relearning attempts
+            env["LSTAR_CACHE_LEARNER"] = cache_learner
+            env["LSTAR_LEARNER"] = runtime_learner
+            env["BM_BETAMAX_LEARNER"] = runtime_learner
 
             cmd = build_command(args, mode, db_path, cap)
             print(f"[ABLATION] Running {mode} cap={cap} -> DB {db_path}")
+            print(f"[ABLATION] Learners: cache={cache_learner}, runtime={runtime_learner}")
             print(f"[ABLATION] CMD: {' '.join(cmd)}")
             if args.dry_run:
                 continue
