@@ -108,3 +108,7 @@ project/repair_results/
 
 #result
 repair_results/
+
+#binary files
+/*.bin
+erepair
