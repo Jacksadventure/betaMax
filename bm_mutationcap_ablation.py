@@ -30,7 +30,7 @@ import sys
 from typing import List
 
 
-DEFAULT_CAPS = [0,80,100]
+DEFAULT_CAPS = [0]
 DEFAULT_MODES = ["single", "double", "triple"]
 DEFAULT_TEST_K = 50
 DEFAULT_TRAIN_K = 50

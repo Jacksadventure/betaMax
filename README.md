@@ -87,9 +87,19 @@ Important top‑level files and directories:
 git clone git@github.com:Jacksadventure/EarlyRepairer.git
 cd EarlyRepairer
 
-# Recommended: create a virtualenv here
+# Create and activate a virtual environment (recommended)
+python3 -m venv venv
+source venv/bin/activate  # macOS/Linux
+# On Windows (PowerShell): .\venv\Scripts\Activate.ps1
 
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+To leave the virtual environment, run:
+
+```bash
+deactivate
 ```
 
 `requirements.txt` includes:
