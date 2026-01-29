@@ -86,6 +86,7 @@ project/build/
 mutated_files/
 repair_results/
 cache/
+cache*/
 project/repair_results/
 
 # Backup & misc
