@@ -94,3 +94,16 @@ project/repair_results/
 
 #pics
 .png
+
+#input files
+/*.txt
+/*.csv
+/*.json
+/*.url
+/*.deta
+/*.ipv4
+/*.ipv6
+/*.isbn
+
+#result
+repair_results/
