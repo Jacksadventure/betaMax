@@ -48,6 +48,7 @@ htmlcov/
 .tox/
 .nox/
 .cache/
+.mplconfig/
 .hypothesis/
 .pyre/
 .pytype/

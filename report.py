@@ -29,10 +29,14 @@ Modify `DATABASES` as needed.
 """
 
 from __future__ import annotations
-import sqlite3, math, sys
+import sqlite3, math, sys, os
 from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
+os.environ.setdefault("MPLCONFIGDIR", str(Path(__file__).resolve().parent / ".mplconfig"))
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # ───────────────────────────────── CONFIG ────────────────────────────────── #
@@ -1261,6 +1265,7 @@ def plot_rpni_success_vs_iterations():
     - Treats algorithms named 'rpni' or 'betamax' as the same family.
     - Produces one PNG per DB in DATABASES.
     - Also produces a combined 3-up 'rpni_success_3up.png' (1/2/3 mutations).
+    - Also produces a single combined overlay plot 'betamax_success_across_mutations.png'.
     """
     alg_names = ("rpni", "betamax")
     curves: Dict[str, Tuple[List[int], List[float], str]] = {}
@@ -1344,6 +1349,171 @@ def plot_rpni_success_vs_iterations():
         fig.savefig(out_path, dpi=150, bbox_inches="tight")
         plt.close()
         print(f"[INFO] Saved 3-up BETAMAX success plot -> {out_path}")
+
+    # Single combined overlay plot (one axes, three mutation-count curves).
+    if panel_items:
+        fig, ax = plt.subplots(figsize=(7.6, 4.5), constrained_layout=True)
+        plateau_label_slots: Dict[int, int] = {}
+        for curve_idx, (key, (xs, ys, _title)) in enumerate(panel_items):
+            label = label_map.get(key, key)
+            (line,) = ax.plot(xs, ys, marker="o", linewidth=2, label=label)
+            if not xs or not ys:
+                continue
+
+            color = line.get_color()
+
+            # Start value at budget T=1.
+            y0 = ys[0]
+            dx0 = 30 if (curve_idx % 2 == 0) else -30
+            dy0 = 12 + (curve_idx * 14)
+            if y0 <= 0.02:
+                dy0 = max(dy0, 18)
+            ax.annotate(
+                f"{y0 * 100:.1f}%",
+                xy=(xs[0], y0),
+                xytext=(dx0, dy0),
+                textcoords="offset points",
+                ha="left" if dx0 > 0 else "right",
+                va="bottom",
+                fontsize=9,
+                color=color,
+                bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.85),
+                clip_on=False,
+            )
+
+            # Plateau point: earliest budget reaching the maximum success rate.
+            ymax = max(ys)
+            eps = 1e-12
+            idx_max = next((i for i, y in enumerate(ys) if abs(y - ymax) <= eps), len(xs) - 1)
+            x_at_max = xs[idx_max]
+
+            slot = plateau_label_slots.get(int(x_at_max), 0)
+            plateau_label_slots[int(x_at_max)] = slot + 1
+
+            ax.vlines(x_at_max, ymin=0.0, ymax=ymax, colors=color, linestyles="--", linewidth=1.2, alpha=0.7)
+            ax.annotate(
+                f"T={x_at_max}",
+                xy=(x_at_max, 0.0),
+                xycoords=("data", "axes fraction"),
+                xytext=(0, 6 + (slot * 10)),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color=color,
+                bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.85),
+                clip_on=False,
+            )
+            ax.annotate(
+                f"{ymax * 100:.1f}%",
+                xy=(x_at_max, ymax),
+                xytext=(0, 6 + (slot * 10)),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color=color,
+                bbox=dict(boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.85),
+            )
+        ax.set_xlim(1, PLOT_MAX_T)
+        ax.margins(x=0.0)
+        ax.set_xlabel("Repair-iterations budget (T)")
+        ax.set_ylabel("Cumulative success rate (fixed with repair-iterations ≤ T)")
+        ax.set_ylim(0.0, 1.05)
+        ax.grid(True, linestyle="--", alpha=0.3)
+        ax.set_title("BETAMAX success vs repair-iterations (across mutation counts)")
+        ax.legend(title="DB / mutation count", loc="best")
+        out_path = "betamax_success_across_mutations.png"
+        fig.savefig(out_path, dpi=150, bbox_inches="tight")
+        plt.close()
+        print(f"[INFO] Saved overlay BETAMAX success plot -> {out_path}")
+
+def _success_rates_by_algorithm(db: str) -> Dict[str, Dict[str, float]]:
+    """
+    Return per-algorithm success stats for a DB.
+
+    Success is defined by `_is_success` (fixed and within DEFAULT_TIMEOUT).
+    Output schema per alg:
+      {"succ": int, "tot": int, "rate": float}
+    """
+    path = Path(db)
+    if not path.is_file():
+        return {}
+    conn = sqlite3.connect(db)
+    rows = _q(conn, "SELECT algorithm, fixed, repair_time FROM results")
+    conn.close()
+    out: Dict[str, Dict[str, float]] = {}
+    for alg, fixed, repair_time in rows:
+        if not isinstance(alg, str) or not alg:
+            continue
+        bucket = out.setdefault(alg, {"succ": 0.0, "tot": 0.0, "rate": 0.0})
+        bucket["tot"] += 1.0
+        if _is_success(fixed, repair_time):
+            bucket["succ"] += 1.0
+    for bucket in out.values():
+        tot = bucket["tot"]
+        bucket["rate"] = (bucket["succ"] / tot) if tot else 0.0
+    return out
+
+def plot_success_rate_by_mutation_count():
+    """
+    Plot per-algorithm success rate vs mutation count (single/double/triple).
+
+    Produces: success_rate_by_mutation_count.png
+    """
+    label_map = {
+        "single.db": 1,
+        "double.db": 2,
+        "triple.db": 3,
+    }
+    dbs = [db for db in ("single.db", "double.db", "triple.db") if Path(db).is_file()]
+    if not dbs:
+        print("[WARN] No mutation DBs found for success-rate plot", file=sys.stderr)
+        return
+
+    by_db: Dict[str, Dict[str, Dict[str, float]]] = {db: _success_rates_by_algorithm(db) for db in dbs}
+    algs = sorted({alg for stats in by_db.values() for alg in stats.keys()})
+    if not algs:
+        print("[WARN] No algorithms found for success-rate plot", file=sys.stderr)
+        return
+
+    fig, ax = plt.subplots(figsize=(7.2, 4.2), constrained_layout=True)
+    for alg in algs:
+        xs: List[int] = []
+        ys: List[float] = []
+        for db in ("single.db", "double.db", "triple.db"):
+            if db not in by_db:
+                continue
+            x = label_map[db]
+            y = float(by_db[db].get(alg, {}).get("rate", 0.0))
+            xs.append(x)
+            ys.append(y)
+        if not xs:
+            continue
+        ax.plot(xs, ys, marker="o", linewidth=2, label=alg)
+        for x, y in zip(xs, ys):
+            ax.annotate(
+                f"{y * 100:.1f}%",
+                xy=(x, y),
+                xytext=(0, 6),
+                textcoords="offset points",
+                ha="center",
+                va="bottom",
+                fontsize=9,
+                color="0.25",
+            )
+
+    ax.set_title(f"Success rate vs mutation count (timeout ≤ {DEFAULT_TIMEOUT:.0f}s)")
+    ax.set_xlabel("Mutation count")
+    ax.set_ylabel("Success rate")
+    ax.set_xticks([1, 2, 3], ["1", "2", "3"])
+    ax.set_ylim(0.0, 1.05)
+    ax.grid(True, linestyle="--", alpha=0.3)
+    ax.legend(title="Algorithm", loc="best")
+    out_path = "success_rate_by_mutation_count.png"
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"[INFO] Saved success-rate plot -> {out_path}")
 
 # ─────────────────────────────────────────────────────────────────────────── #
 
