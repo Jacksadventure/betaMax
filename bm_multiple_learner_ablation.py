@@ -77,6 +77,12 @@ def parse_args() -> argparse.Namespace:
                         help="Forward --lstar-mutation-deterministic.")
     parser.add_argument("--lstar-mutation-seed", type=int,
                         help="Forward --lstar-mutation-seed.")
+    parser.add_argument(
+        "--betamax-engine",
+        choices=["python", "cpp"],
+        default=None,
+        help="Forward to bm_multiple as --betamax-engine (or set env BM_BETAMAX_ENGINE).",
+    )
     parser.add_argument("--skip-existing", action="store_true",
                         help="Skip runs whose DB already exists.")
     parser.add_argument("--dry-run", action="store_true",
@@ -122,6 +128,8 @@ def build_command(args: argparse.Namespace, db_path: str) -> List[str]:
         cmd.append("--lstar-mutation-deterministic")
     if args.lstar_mutation_seed is not None:
         cmd += ["--lstar-mutation-seed", str(args.lstar_mutation_seed)]
+    if args.betamax_engine:
+        cmd += ["--betamax-engine", args.betamax_engine]
     if args.bm_args:
         cmd += args.bm_args
     return cmd
@@ -148,6 +156,8 @@ def main():
         env["BM_BETAMAX_LEARNER"] = learner
         env["LSTAR_LEARNER"] = learner
         env["LSTAR_CACHE_LEARNER"] = learner
+        if args.betamax_engine:
+            env["BM_BETAMAX_ENGINE"] = str(args.betamax_engine)
         if args.cache_root_template:
             cache_root = args.cache_root_template.format(learner=learner)
             os.makedirs(cache_root, exist_ok=True)

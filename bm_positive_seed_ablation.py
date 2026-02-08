@@ -126,6 +126,12 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--lstar-mutation-deterministic", action="store_true",
                     help="Forward --lstar-mutation-deterministic.")
     ap.add_argument("--lstar-mutation-seed", type=int, help="Forward --lstar-mutation-seed.")
+    ap.add_argument(
+        "--betamax-engine",
+        choices=["python", "cpp"],
+        default=None,
+        help="Forward to bm_* as --betamax-engine (or set env BM_BETAMAX_ENGINE).",
+    )
     ap.add_argument("--skip-existing", action="store_true",
                     help="Skip a run if its DB already exists.")
     ap.add_argument("--dry-run", action="store_true",
@@ -174,6 +180,8 @@ def build_command(args: argparse.Namespace, *, mode: str, db_path: str) -> List[
         cmd.append("--lstar-mutation-deterministic")
     if args.lstar_mutation_seed is not None:
         cmd += ["--lstar-mutation-seed", str(args.lstar_mutation_seed)]
+    if args.betamax_engine:
+        cmd += ["--betamax-engine", args.betamax_engine]
     if args.bm_args:
         cmd += args.bm_args
     return cmd
@@ -222,6 +230,8 @@ def main() -> int:
             env["LSTAR_CACHE_LEARNER"] = cache_learner
             env["LSTAR_LEARNER"] = runtime_learner
             env["BM_BETAMAX_LEARNER"] = runtime_learner
+            if args.betamax_engine:
+                env["BM_BETAMAX_ENGINE"] = str(args.betamax_engine)
 
             cmd = build_command(args, mode=mode, db_path=db_path)
             print(f"[ABLATION] Running {mode} K={k} -> DB {db_path}")

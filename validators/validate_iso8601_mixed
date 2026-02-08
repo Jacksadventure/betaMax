@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 <file_path>" >&2
+  exit 2
+fi
+
+FILE_PATH="$1"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+"$SCRIPT_DIR/validate_iso8601" "$FILE_PATH" >/dev/null 2>&1 && exit 0
+"$SCRIPT_DIR/validate_time" "$FILE_PATH" >/dev/null 2>&1 && exit 0
+
+exit 1

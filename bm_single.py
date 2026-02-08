@@ -10,6 +10,7 @@ import argparse
 from typing import Optional
 
 from bm_lstar_mutations import LStarMutationPool, get_mutation_table_name
+from bm_betamax_backend import build_betamax_cmd, cpp_bin_path, get_engine, should_precompute_cache
 
 # ------------------------------------------------------------------------------
 # Configuration
@@ -75,6 +76,9 @@ os.makedirs(CACHE_ROOT, exist_ok=True)
 # "broken DB strings" are often not reliable negatives for learning.
 BM_NEGATIVES_FROM_DB = os.environ.get("BM_NEGATIVES_FROM_DB", "0").lower() in ("1", "true", "yes")
 
+# betaMax engine selection (cpp by default; python for betamax/app/betamax.py)
+BETAMAX_ENGINE = get_engine(default="cpp")
+
 
 def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
     """
@@ -82,7 +86,8 @@ def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
     with different algorithms do not overwrite each other.
     """
     learner_name = (learner or _runtime_betamax_learner()).replace("-", "_")
-    return os.path.join(CACHE_ROOT, f"lstar_{fmt}_{learner_name}.json")
+    ext = "json" if BETAMAX_ENGINE == "python" else "dfa"
+    return os.path.join(CACHE_ROOT, f"lstar_{fmt}_{learner_name}.{ext}")
 
 
 def _runtime_betamax_learner() -> str:
@@ -712,35 +717,19 @@ def repair_and_update_entry(cursor, conn, row):
             oracle_cmd = oracle_wrapper
         else:
             oracle_cmd = None
-        cmd = [
-            "python3", "betamax/app/betamax.py",
-            "--positives", pos_file,
-            "--negatives", neg_file,
-            # Use shared cache per format across all bm_* scripts
-            "--grammar-cache", cache_path,
-            "--category", category,
-            "--broken-file", input_file,
-            "--output-file", output_file,
-            "--max-attempts", str(attempts),
-            # Avoid betamax's default mutation augmentation during benchmarks.
-            "--mutations", "0"
-        ]
-        if oracle_cmd:
-            cmd += ["--oracle-validator", oracle_cmd]
-        # Equivalence speed knobs via env (optional; to reduce oracle query cost)
-        eq_flags = []
-        if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
-            eq_flags += ["--eq-max-length", os.environ["LSTAR_EQ_MAX_LENGTH"]]
-        if os.environ.get("LSTAR_EQ_SAMPLES_PER_LENGTH"):
-            eq_flags += ["--eq-samples-per-length", os.environ["LSTAR_EQ_SAMPLES_PER_LENGTH"]]
-        if os.environ.get("LSTAR_EQ_DISABLE_SAMPLING", "").lower() in ("1", "true", "yes"):
-            eq_flags += ["--eq-disable-sampling"]
-        if os.environ.get("LSTAR_EQ_SKIP_NEGATIVES", "").lower() in ("1", "true", "yes"):
-            eq_flags += ["--eq-skip-negatives"]
-        if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
-            eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
-        cmd += ["--learner", runtime_learner]
-        cmd += eq_flags
+        cmd = build_betamax_cmd(
+            engine=BETAMAX_ENGINE,
+            positives=pos_file,
+            negatives=neg_file,
+            cache_path=cache_path,
+            category=category,
+            broken_file=input_file,
+            output_file=output_file,
+            attempts=attempts,
+            mutations=0,
+            learner=runtime_learner,
+            oracle_cmd=oracle_cmd,
+        )
     else:
         # Example usage of your erepair.jar approach
         cmd = [
@@ -784,12 +773,16 @@ def repair_and_update_entry(cursor, conn, row):
         # Extract oracle info (optional)
         it_o, correct_runs, incorrect_runs, incomplete_runs = extract_oracle_info(stdout)
         if algorithm == "betamax":
-            iterations = extract_lstar_attempts(stdout)
-            ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
-            if repair_time > 0:
-                ec_ratio = ec_time / repair_time
-                learn_ratio = learn_time / repair_time
-                oracle_ratio = oracle_time / repair_time
+            if BETAMAX_ENGINE == "python":
+                iterations = extract_lstar_attempts(stdout)
+                ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
+                if repair_time > 0:
+                    ec_ratio = ec_time / repair_time
+                    learn_ratio = learn_time / repair_time
+                    oracle_ratio = oracle_time / repair_time
+            else:
+                # C++ engine does not emit Python betaMax metrics/attempt counters.
+                iterations = it_o
         else:
             iterations = it_o
             if algorithm == "erepair":
@@ -974,6 +967,12 @@ def main():
                         help="Use deterministic mutation enumeration (default: random sampling).")
     parser.add_argument("--lstar-mutation-seed", type=int,
                         help="Optional seed applied to the random sampler (ignored for deterministic mode).")
+    parser.add_argument(
+        "--betamax-engine",
+        choices=["python", "cpp"],
+        default=None,
+        help="Select betaMax engine backend for algorithm=betamax (default: env BM_BETAMAX_ENGINE or 'cpp')",
+    )
     args = parser.parse_args()
 
     # Allow "--mutations 20" style usage by separating numeric caps from
@@ -995,6 +994,18 @@ def main():
     QUIET = bool(args.quiet)
     LIMIT_N = args.limit
     PAUSE_ON_EXIT = bool(args.pause_on_exit)
+    global BETAMAX_ENGINE
+    BETAMAX_ENGINE = get_engine(args.betamax_engine, default="cpp")
+    if BETAMAX_ENGINE == "cpp":
+        exe = cpp_bin_path()
+        if not os.path.exists(exe):
+            raise SystemExit(
+                f"[ERROR] C++ betaMax binary not found: {exe}\n"
+                "Build it first:\n"
+                "  cmake -S betamax_cpp -B betamax_cpp/build -DCMAKE_BUILD_TYPE=Release\n"
+                "  cmake --build betamax_cpp/build -j\n"
+                "Or run with: --betamax-engine python"
+            )
 
     db_path = args.db
 
@@ -1005,8 +1016,10 @@ def main():
     # 1) Create or reuse the database
     create_database(db_path)
 
-    # Precompute L* grammar caches for betamax (per format) using first 20 pos/neg
-    if "betamax" in REPAIR_ALGORITHMS:
+    # Precompute caches for the selected engine:
+    #   - python: writes JSON grammar cache via --grammar-cache --init-cache
+    #   - cpp:    writes DFA cache via --dfa-cache --init-cache
+    if "betamax" in REPAIR_ALGORITHMS and should_precompute_cache(BETAMAX_ENGINE):
         os.makedirs(CACHE_ROOT, exist_ok=True)
         cache_learner = _cache_betamax_learner()
         for mutation_type in (args.mutations if args.mutations else MUTATION_TYPES):
@@ -1060,33 +1073,62 @@ def main():
                         oracle_cmd = oracle_wrapper
                     else:
                         oracle_cmd = None
-                    cmd = [
-                        "python3", "betamax/app/betamax.py",
-                        "--positives", pos_file,
-                        "--negatives", neg_file,
-                        "--category", category,
-                        "--grammar-cache", cache_path,
-                        "--init-cache"
-                    ]
-                    if oracle_cmd:
-                        cmd += ["--oracle-validator", oracle_cmd]
-                    # Equivalence speed knobs via env for precompute as well
-                    eq_flags = []
-                    if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
-                        eq_flags += ["--eq-max-length", os.environ["LSTAR_EQ_MAX_LENGTH"]]
-                    if os.environ.get("LSTAR_EQ_SAMPLES_PER_LENGTH"):
-                        eq_flags += ["--eq-samples-per-length", os.environ["LSTAR_EQ_SAMPLES_PER_LENGTH"]]
-                    if os.environ.get("LSTAR_EQ_DISABLE_SAMPLING", "").lower() in ("1", "true", "yes"):
-                        eq_flags += ["--eq-disable-sampling"]
-                    if os.environ.get("LSTAR_EQ_SKIP_NEGATIVES", "").lower() in ("1", "true", "yes"):
-                        eq_flags += ["--eq-skip-negatives"]
-                    if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
-                        eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
                     learner_pre = cache_learner
-                    cmd += ["--learner", learner_pre]
-                    cmd += eq_flags
-                    pre_mut = os.environ.get("LSTAR_PRECOMPUTE_MUTATIONS", "60")
-                    cmd += ["--mutations", str(pre_mut)]
+                    pre_mut = int(os.environ.get("LSTAR_PRECOMPUTE_MUTATIONS", "60"))
+
+                    if BETAMAX_ENGINE == "python":
+                        cmd = [
+                            "python3", "betamax/app/betamax.py",
+                            "--positives", pos_file,
+                            "--negatives", neg_file,
+                            "--category", category,
+                            "--grammar-cache", cache_path,
+                            "--init-cache",
+                            "--learner", learner_pre,
+                        ]
+                        if oracle_cmd:
+                            cmd += ["--oracle-validator", oracle_cmd]
+                        # Equivalence speed knobs via env for precompute as well
+                        eq_flags = []
+                        if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
+                            eq_flags += ["--eq-max-length", os.environ["LSTAR_EQ_MAX_LENGTH"]]
+                        if os.environ.get("LSTAR_EQ_SAMPLES_PER_LENGTH"):
+                            eq_flags += ["--eq-samples-per-length", os.environ["LSTAR_EQ_SAMPLES_PER_LENGTH"]]
+                        if os.environ.get("LSTAR_EQ_DISABLE_SAMPLING", "").lower() in ("1", "true", "yes"):
+                            eq_flags += ["--eq-disable-sampling"]
+                        if os.environ.get("LSTAR_EQ_SKIP_NEGATIVES", "").lower() in ("1", "true", "yes"):
+                            eq_flags += ["--eq-skip-negatives"]
+                        if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
+                            eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
+                        cmd += eq_flags
+                        if pre_mut > 0:
+                            cmd += ["--mutations", str(pre_mut)]
+                    else:
+                        exe = cpp_bin_path()
+                        cmd = [
+                            exe,
+                            "--positives", pos_file,
+                            "--negatives", neg_file,
+                            "--category", category,
+                            "--dfa-cache", cache_path,
+                            "--init-cache",
+                            "--learner", learner_pre,
+                            "--repo-root", ".",
+                        ]
+                        if oracle_cmd:
+                            cmd += ["--oracle-validator", oracle_cmd]
+                        if os.environ.get("LSTAR_EQ_DISABLE_SAMPLING", "").lower() in ("1", "true", "yes"):
+                            cmd += ["--eq-disable-sampling"]
+                        if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
+                            cmd += ["--eq-max-length", os.environ["LSTAR_EQ_MAX_LENGTH"]]
+                        if os.environ.get("LSTAR_EQ_SAMPLES_PER_LENGTH"):
+                            cmd += ["--eq-samples-per-length", os.environ["LSTAR_EQ_SAMPLES_PER_LENGTH"]]
+                        if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
+                            cmd += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
+                        if os.environ.get("LSTAR_EQ_MAX_ROUNDS"):
+                            cmd += ["--eq-max-rounds", os.environ["LSTAR_EQ_MAX_ROUNDS"]]
+                        if pre_mut > 0:
+                            cmd += ["--mutations", str(pre_mut)]
                     print(f"[DEBUG] Precompute cache for {format_key}: {' '.join(cmd)} (K={pre_k})")
                     pre_tmo = int(os.environ.get("LSTAR_PRECOMPUTE_TIMEOUT", "600"))
                     env = dict(os.environ)
