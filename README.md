@@ -217,7 +217,7 @@ BM_BETAMAX_ENGINE=cpp python bm_single.py
 
 Useful C++ knobs:
 - `BM_BETAMAX_CPP_BIN` (default: `betamax_cpp/build/betamax_cpp`)
-- `BM_CPP_MAX_COST` (default: `3`)
+- `BM_CPP_MAX_COST` (default: `-1`, meaning unbounded max-cost)
 - `BM_CPP_MAX_CANDIDATES` (default: `50`)
 - Note: benchmark scripts pass their existing betaMax `--mutations` value to the C++ engine as well (mutation-based augmentation is supported).
 
@@ -225,6 +225,43 @@ To switch back to the original Python engine:
 
 ```bash
 python bm_single.py --betamax-engine python
+```
+
+#### DDMax (eRepair.jar) benchmarks
+
+The benchmark runners also support `--algorithms ddmax`:
+
+- For regex formats (`url`, `date`, `time`, `isbn`, `ipv4`, `ipv6`), `ddmax` is implemented in Python as a
+  **deletions-only** delta-debugging repair (DDMax): it searches for a small set of character deletions
+  that makes the validator accept the string.
+- For subject formats (`json`, `ini`, `dot`, `obj`, `lisp`, `c`), `ddmax` is executed via `project/bin/erepair.jar`.
+
+1) Ensure the jar exists (or rebuild it):
+
+```bash
+gradle -p project deployJar
+java -jar project/bin/erepair.jar -h
+```
+
+2) Generate mutation DBs if needed:
+
+- The repository already contains mutation DBs for the regex formats.
+- For subject formats, you may need to generate them (example: JSON, single mutations):
+
+```bash
+python3 mutation_single.py --folder original_files/json_data --validator project/bin/subjects/cjson/cjson --database mutated_files/single_json.db
+```
+
+3) Run DDMax benchmarks (single/double/triple):
+
+```bash
+bash run_ddmax.sh
+```
+
+To run subject formats instead:
+
+```bash
+DDMAX_FORMAT_SET=subjects bash run_ddmax.sh
 ```
 
 #### Basic single‑string repair

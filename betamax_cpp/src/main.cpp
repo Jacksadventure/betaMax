@@ -67,6 +67,29 @@ static bool getenv_bool(const char* name) {
   return (v == "1" || v == "true" || v == "yes");
 }
 
+static std::string preview_for_log(std::string_view s, size_t max_len = 200) {
+  std::string out;
+  out.reserve(std::min(max_len, s.size()) + 32);
+  for (size_t i = 0; i < s.size() && i < max_len; i++) {
+    unsigned char c = (unsigned char)s[i];
+    if (c == '\n') {
+      out += "\\n";
+    } else if (c == '\r') {
+      out += "\\r";
+    } else if (c == '\t') {
+      out += "\\t";
+    } else if (std::isprint(c)) {
+      out.push_back((char)c);
+    } else {
+      char buf[8];
+      std::snprintf(buf, sizeof(buf), "\\x%02X", (unsigned)c);
+      out += buf;
+    }
+  }
+  if (s.size() > max_len) out += "...(truncated)";
+  return out;
+}
+
 // Minimal shlex-like splitter (supports single/double quotes and backslash escaping).
 static std::vector<std::string> split_cmdline(std::string_view s) {
   std::vector<std::string> out;
@@ -155,6 +178,7 @@ struct Options {
   int eq_max_oracle = 0;
   int eq_max_rounds = 0;
   std::optional<uint64_t> seed;
+  bool verbose = false;
 };
 
 static void print_usage(const char* argv0) {
@@ -192,7 +216,8 @@ static void print_usage(const char* argv0) {
       << "  --eq-samples-per-length <int>   (default: 20)\n"
       << "  --eq-max-oracle <int>           (default: 0)\n"
       << "  --eq-max-rounds <int>           (default: 0)\n"
-      << "  --seed <uint64>                 (random seed)\n";
+      << "  --seed <uint64>                 (random seed)\n"
+      << "  --verbose                       (more debug output)\n";
 }
 
 static std::optional<Options> parse_args(int argc, char** argv) {
@@ -266,10 +291,13 @@ static std::optional<Options> parse_args(int argc, char** argv) {
       opt.eq_max_rounds = std::stoi(need("--eq-max-rounds"));
     } else if (a == "--seed") {
       opt.seed = (uint64_t)std::stoull(need("--seed"));
+    } else if (a == "--verbose" || a == "-v") {
+      opt.verbose = true;
     } else {
       throw std::runtime_error("unknown arg: " + a);
     }
   }
+  if (getenv_bool("BETAMAX_VERBOSE")) opt.verbose = true;
   if (!opt.positives) throw std::runtime_error("--positives is required");
   if (opt.category.empty()) throw std::runtime_error("--category is required");
   if (opt.init_cache) {
@@ -858,6 +886,16 @@ struct Oracle {
   std::optional<std::vector<std::string>> override_cmd;  // argv without temp file
   int timeout_ms = 3000;
   bool debug = false;
+  bool verbose = false;
+
+  struct Stats {
+    uint64_t total = 0;
+    uint64_t correct = 0;
+    uint64_t incorrect = 0;
+    uint64_t incomplete = 0;
+    double seconds_total = 0.0;
+  };
+  mutable Stats stats;
 
   std::vector<std::string> default_cmd_argv(const fs::path& temp_path) const {
     std::string base = category_to_base(category);
@@ -870,6 +908,28 @@ struct Oracle {
   }
 
   bool validate_text(std::string_view text) const {
+    const auto t0 = std::chrono::steady_clock::now();
+    auto record = [&](bool ok, bool incomplete, const char* why) -> bool {
+      stats.total++;
+      if (incomplete) {
+        stats.incomplete++;
+      } else if (ok) {
+        stats.correct++;
+      } else {
+        stats.incorrect++;
+      }
+      const auto t1 = std::chrono::steady_clock::now();
+      stats.seconds_total += std::chrono::duration<double>(t1 - t0).count();
+      if (verbose) {
+        std::cerr << "[DEBUG] Membership verdict: "
+                  << (incomplete ? "INCOMPLETE" : (ok ? "ACCEPT" : "REJECT")) << " for '"
+                  << preview_for_log(text) << "'";
+        if (why && *why) std::cerr << " (" << why << ")";
+        std::cerr << "\n";
+      }
+      return ok;
+    };
+
     // temp file
     fs::path dir = fs::temp_directory_path();
     std::string tmpl = (dir / "betamax_cpp_XXXXXX.txt").string();
@@ -895,10 +955,10 @@ struct Oracle {
     int rc = std::system(cmdline.c_str());
     std::error_code ec;
     fs::remove(temp_path, ec);
-    return rc == 0;
+    return record(rc == 0, false, "system");
 #else
     int fd = ::mkstemps(buf.data(), 4);  // ".txt"
-    if (fd < 0) return false;
+    if (fd < 0) return record(false, true, "mkstemps");
     fs::path temp_path(buf.data());
     // Write content.
     ssize_t w = ::write(fd, text.data(), text.size());
@@ -926,7 +986,7 @@ struct Oracle {
       if (debug) std::cerr << "[WARN] posix_spawnp failed: " << std::strerror(spawn_rc) << "\n";
       std::error_code ec;
       fs::remove(temp_path, ec);
-      return false;
+      return record(false, true, "posix_spawnp");
     }
 
     auto start = std::chrono::steady_clock::now();
@@ -943,7 +1003,7 @@ struct Oracle {
           (void)::waitpid(pid, &status, 0);
           std::error_code ec;
           fs::remove(temp_path, ec);
-          return false;
+          return record(false, true, "timeout");
         }
         ::usleep(2000);
         continue;
@@ -959,10 +1019,10 @@ struct Oracle {
     if (WIFEXITED(status)) {
       int rc = WEXITSTATUS(status);
       if (debug) std::cerr << "[DEBUG] Oracle rc: " << rc << "\n";
-      return rc == 0;
+      return record(rc == 0, false, "exit");
     }
     if (debug) std::cerr << "[DEBUG] Oracle terminated abnormally\n";
-    return false;
+    return record(false, true, "abnormal");
 #endif
   }
 };
@@ -1322,7 +1382,27 @@ int main(int argc, char** argv) {
     oracle.category = opt.category;
     oracle.timeout_ms = opt.oracle_timeout_ms;
     oracle.debug = getenv_bool("BETAMAX_DEBUG_ORACLE");
+    oracle.verbose = opt.verbose;
     if (opt.oracle_validator) oracle.override_cmd = split_cmdline(*opt.oracle_validator);
+
+    struct OracleStatsReporter {
+      const Oracle& oracle;
+      bool enabled = false;
+      ~OracleStatsReporter() {
+        if (!enabled) return;
+        const auto& s = oracle.stats;
+        std::cerr << "[INFO] Oracle stats: total=" << s.total << " correct=" << s.correct << " incorrect=" << s.incorrect
+                  << " incomplete=" << s.incomplete << " seconds_total=" << s.seconds_total << "\n";
+      }
+    } oracle_stats_reporter{oracle, opt.verbose};
+
+    if (opt.verbose) {
+      std::cerr << "[DEBUG] Options: category=" << opt.category << " learner=" << opt.learner << " max_attempts=" << opt.max_attempts
+                << " max_cost=" << opt.max_cost << " max_candidates=" << opt.max_candidates << " attempt_candidates=" << opt.attempt_candidates
+                << " mutations=" << opt.mutations << " oracle_timeout_ms=" << opt.oracle_timeout_ms << "\n";
+      if (opt.dfa_cache) std::cerr << "[DEBUG] DFA cache: " << opt.dfa_cache->string() << " init_cache=" << (opt.init_cache ? 1 : 0) << "\n";
+      if (opt.oracle_validator) std::cerr << "[DEBUG] Oracle override cmd: " << *opt.oracle_validator << "\n";
+    }
 
     // Mutation-based sample augmentation (like Python betaMax --mutations):
     // generate mutated strings from positives, label them with the oracle,
@@ -1576,8 +1656,18 @@ int main(int argc, char** argv) {
       std::optional<std::string> best_rejected;
       for (size_t i = 0; i < candidates.size(); i++) {
         const auto& c = candidates[i];
-        if (c.text.size() < hard_min || c.text.size() > hard_max) continue;
-        if (neg_set.count(c.text)) continue;
+        if (opt.verbose) {
+          std::cerr << "[DEBUG] Candidate " << (i + 1) << "/" << candidates.size() << " cost=" << c.cost << " len=" << c.text.size()
+                    << " text='" << preview_for_log(c.text) << "'\n";
+        }
+        if (c.text.size() < hard_min || c.text.size() > hard_max) {
+          if (opt.verbose) std::cerr << "[DEBUG] Candidate skipped: length guard\n";
+          continue;
+        }
+        if (neg_set.count(c.text)) {
+          if (opt.verbose) std::cerr << "[DEBUG] Candidate skipped: already negative\n";
+          continue;
+        }
         bool ok = oracle.validate_text(c.text);
         if (ok) {
           std::cout << c.text << "\n";
