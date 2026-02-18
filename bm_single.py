@@ -28,7 +28,7 @@ REPAIR_ALGORITHMS = ["betamax"]
 PROJECT_PATHS = {
     "dot": "project/erepair-subjects/dot/build/dot_parser",
     "ini": "project/erepair-subjects/ini/ini",
-    "json": "project/erepair-subjects/cjson/cjson",
+    "json": "project/bin/subjects/cjson/cjson",
     "lisp": "project/erepair-subjects/sexp-parser/sexp",
     "obj": "project/erepair-subjects/obj/build/obj_parser",
     "c": "project/erepair-subjects/tiny/tiny",
@@ -55,7 +55,7 @@ REGEX_DIR_TO_CATEGORY = {
 REGEX_FORMATS = set(REGEX_DIR_TO_CATEGORY.keys())
 
 # Valid formats/folders to process
-VALID_FORMATS = ["date", "time", "isbn", "ipv4", "url", "ipv6"]
+VALID_FORMATS = ["date", "time", "isbn", "ipv4", "url", "ipv6", "json"]
 
 
 MUTATION_TYPES = ["single"]
@@ -706,12 +706,16 @@ def repair_and_update_entry(cursor, conn, row):
         oracle_wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
         if oracle_override:
             oracle_cmd = oracle_override
-        elif os.path.exists(oracle_bin):
-            oracle_cmd = oracle_bin
-        elif os.path.exists(oracle_wrapper):
-            oracle_cmd = oracle_wrapper
         else:
-            oracle_cmd = None
+            if base_format in REGEX_FORMATS:
+                if os.path.exists(oracle_bin):
+                    oracle_cmd = oracle_bin
+                elif os.path.exists(oracle_wrapper):
+                    oracle_cmd = oracle_wrapper
+                else:
+                    oracle_cmd = None
+            else:
+                oracle_cmd = PROJECT_PATHS.get(base_format)
         cmd = [
             "python3", "betamax/app/betamax.py",
             "--positives", pos_file,
@@ -1054,12 +1058,16 @@ def main():
                     oracle_wrapper = os.path.join("validators", "regex", f"validate_{fmt}")
                     if oracle_override:
                         oracle_cmd = oracle_override
-                    elif os.path.exists(oracle_bin):
-                        oracle_cmd = oracle_bin
-                    elif os.path.exists(oracle_wrapper):
-                        oracle_cmd = oracle_wrapper
                     else:
-                        oracle_cmd = None
+                        if fmt in REGEX_FORMATS:
+                            if os.path.exists(oracle_bin):
+                                oracle_cmd = oracle_bin
+                            elif os.path.exists(oracle_wrapper):
+                                oracle_cmd = oracle_wrapper
+                            else:
+                                oracle_cmd = None
+                        else:
+                            oracle_cmd = PROJECT_PATHS.get(fmt)
                     cmd = [
                         "python3", "betamax/app/betamax.py",
                         "--positives", pos_file,

@@ -735,7 +735,11 @@ def main():
     ap.add_argument("--output-file", help="If given and exactly one broken input is processed, write repaired text here")
     ap.add_argument("--grammar-cache", help="Path to cache JSON for learned grammar. If exists (and no --init-cache), it will be loaded; else a new cache will be saved after learning.")
     ap.add_argument("--init-cache", action="store_true", help="Force re-learn from provided pos/neg and overwrite the cache at --grammar-cache.")
-    ap.add_argument("--category", required=True, choices=["Date","ISO8601","Time","URL","ISBN","IPv4","IPv6","FilePath"], help="Oracle category for match.py")
+    ap.add_argument(
+        "--category",
+        required=True,
+        help="Oracle category for match.py (e.g. Date/Time/URL/...) or any label when using --oracle-validator.",
+    )
     ap.add_argument("--max-attempts", type=int, default=500, help="Max attempts to relearn with added negatives on oracle failure")
     ap.add_argument("--limit", type=int, default=10, help="Limit number of negatives to process (for quick runs)")
     ap.add_argument("--unknown-policy", default="negative", choices=["negative","positive","error"], help="Unknown membership policy for SampleTeacher")
@@ -770,6 +774,15 @@ def main():
             validator_cmd = shlex.split(args.oracle_validator)
         except Exception:
             validator_cmd = [args.oracle_validator]
+    else:
+        known = {"Date", "ISO8601", "Time", "URL", "ISBN", "IPv4", "IPv6", "FilePath"}
+        if args.category not in known:
+            print(
+                "[ERROR] Unknown --category. Use one of: "
+                + ", ".join(sorted(known))
+                + " (or pass --oracle-validator for custom subjects)."
+            )
+            return
 
     # Membership callback for fuzzing-based learners (rpni_fuzz)
     def _is_member_oracle(text: str) -> bool:
