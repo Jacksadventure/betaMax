@@ -762,12 +762,16 @@ def repair_and_update_entry(cursor, conn, row):
         oracle_wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
         if oracle_override:
             oracle_cmd = oracle_override
-        elif os.path.exists(oracle_bin):
-            oracle_cmd = oracle_bin
-        elif os.path.exists(oracle_wrapper):
-            oracle_cmd = oracle_wrapper
         else:
-            oracle_cmd = None
+            if base_format in REGEX_FORMATS:
+                if os.path.exists(oracle_bin):
+                    oracle_cmd = oracle_bin
+                elif os.path.exists(oracle_wrapper):
+                    oracle_cmd = oracle_wrapper
+                else:
+                    oracle_cmd = None
+            else:
+                oracle_cmd = PROJECT_PATHS.get(base_format)
         cmd = build_betamax_cmd(
             engine=BETAMAX_ENGINE,
             positives=pos_file,
@@ -1159,12 +1163,16 @@ def main():
                     oracle_wrapper = os.path.join("validators", "regex", f"validate_{fmt}")
                     if oracle_override:
                         oracle_cmd = oracle_override
-                    elif os.path.exists(oracle_bin):
-                        oracle_cmd = oracle_bin
-                    elif os.path.exists(oracle_wrapper):
-                        oracle_cmd = oracle_wrapper
                     else:
-                        oracle_cmd = None
+                        if fmt in REGEX_FORMATS:
+                            if os.path.exists(oracle_bin):
+                                oracle_cmd = oracle_bin
+                            elif os.path.exists(oracle_wrapper):
+                                oracle_cmd = oracle_wrapper
+                            else:
+                                oracle_cmd = None
+                        else:
+                            oracle_cmd = PROJECT_PATHS.get(fmt)
                     learner_pre = cache_learner
                     pre_mut = int(os.environ.get("LSTAR_PRECOMPUTE_MUTATIONS", "60"))
 
