@@ -43,12 +43,14 @@ Important top‑level files and directories:
   - `bm_single.py` – run benchmarks on single‑error cases.
   - `bm_multiple.py` – benchmarks for multiple‑error settings.
   - `bm_triple.py` – benchmarks for triple‑error settings.
+  - `bm_iso8601_mixed500.py` – dedicated ISO8601 mixed benchmark (train=400/test=100) with **no precompute timeout**.
   - `warmup.py` – warm‑up runs and cache precomputation.
   - `mutation_single.py`, `mutation_double.py`, `mutation_triple.py`, `mutation_truncated.py` – mutation generators for building broken inputs from seed data.
   - `report.py` – reporting/aggregation utilities for benchmark outputs.
 
 - **Data & results**
   - `data/` – combined and per‑domain positive data (e.g. `data/date`, `data/ipv4`, `data/url`, ...).
+  - `data/iso8601_500_mixed.txt` – shuffled ISO8601/time mixed dataset used by `bm_iso8601_mixed500.py`.
   - `mutated_files/` – mutated DB files (single/double/triple/truncated variants) used as broken inputs.
   - `repair_results/` – repair output and logs produced by experiments.
 
@@ -61,10 +63,14 @@ Important top‑level files and directories:
       - `betamax.py` – core repair implementation (invoked via `betamax/app/betamax.py`).
       - `rpni.py`, `rpni_xover.py`, `rpni_fuzz.py`, `rpni_nfa.py` – example-driven learner variants used by the engine.
       - `ec_runtime.py` – runtime support for experiments (data loading, logging, helpers).
+  - `betamax_cpp/`
+    - Standalone **pure C++** engine (RPNI / rpni_xover + edit-distance repair + validator oracle).
+    - Build with CMake; see `betamax_cpp/README.md`.
 
 - **Validators**
   - `validators/` – C++ validators and wrappers used as domain‑specific oracles:
     - `validate_date`, `validate_ipv4`, `validate_ipv6`, `validate_url`, `validate_isbn`, `validate_pathfile`, `validate_time`, ...
+    - `validate_iso8601_mixed` – wrapper oracle for the mixed ISO8601/time dataset.
     - `match_re2`, `re2_server`, `match_wrapper.sh`, etc.
 
 - **Legacy / experimental**
@@ -79,6 +85,7 @@ Important top‑level files and directories:
 
 - Python **3.11+**
 - A C++17 compiler (for building validators or legacy components if needed)
+- CMake **3.16+** (only needed for `betamax_cpp/`)
 - On macOS/Linux, typical build tools (`make`, `g++` or `clang++`) are useful.
 
 ### 3.2. Clone and install Python dependencies
@@ -182,6 +189,80 @@ Each file contains:
 
 The benchmark scripts (`bm_single.py`, `bm_multiple.py`, `bm_triple.py`) are thin wrappers around the core engine in `betamax/app/betamax.py`.  
 You can also call the engine directly for ad‑hoc experiments.
+
+#### Switching benchmarks to the C++ engine
+
+By default, `bm_single.py` / `bm_multiple.py` / `bm_triple.py` use the **C++** engine (under `betamax_cpp/`) for `algorithm=betamax`.
+
+Build it first:
+
+```bash
+cmake -S betamax_cpp -B betamax_cpp/build -DCMAKE_BUILD_TYPE=Release
+cmake --build betamax_cpp/build -j
+```
+
+To explicitly select the C++ engine:
+
+```bash
+python bm_single.py --betamax-engine cpp
+python bm_multiple.py --betamax-engine cpp
+python bm_triple.py --betamax-engine cpp
+```
+
+Or via environment variable:
+
+```bash
+BM_BETAMAX_ENGINE=cpp python bm_single.py
+```
+
+Useful C++ knobs:
+- `BM_BETAMAX_CPP_BIN` (default: `betamax_cpp/build/betamax_cpp`)
+- `BM_CPP_MAX_COST` (default: `-1`, meaning unbounded max-cost)
+- `BM_CPP_MAX_CANDIDATES` (default: `50`)
+- Note: benchmark scripts pass their existing betaMax `--mutations` value to the C++ engine as well (mutation-based augmentation is supported).
+
+To switch back to the original Python engine:
+
+```bash
+python bm_single.py --betamax-engine python
+```
+
+#### DDMax (eRepair.jar) benchmarks
+
+The benchmark runners also support `--algorithms ddmax`:
+
+- For regex formats (`url`, `date`, `time`, `isbn`, `ipv4`, `ipv6`), `ddmax` is implemented in Python as a
+  **deletions-only** delta-debugging repair (DDMax): it searches for a small set of character deletions
+  that makes the validator accept the string.
+- For subject formats (`json`, `ini`, `dot`, `obj`, `lisp`, `c`), `ddmax` is executed via `project/bin/erepair.jar`.
+
+1) Ensure the jar exists (or rebuild it):
+
+```bash
+gradle -p project deployJar
+java -jar project/bin/erepair.jar -h
+```
+
+2) Generate mutation DBs if needed:
+
+- The repository already contains mutation DBs for the regex formats.
+- For subject formats, you may need to generate them (example: JSON, single mutations):
+
+```bash
+python3 mutation_single.py --folder original_files/json_data --validator project/bin/subjects/cjson/cjson --database mutated_files/single_json.db
+```
+
+3) Run DDMax benchmarks (single/double/triple):
+
+```bash
+bash run_ddmax.sh
+```
+
+To run subject formats instead:
+
+```bash
+DDMAX_FORMAT_SET=subjects bash run_ddmax.sh
+```
 
 #### Basic single‑string repair
 

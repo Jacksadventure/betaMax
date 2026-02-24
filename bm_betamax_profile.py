@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bm_lstar_mutations import get_mutation_table_name
+from bm_betamax_backend import build_betamax_cmd, get_engine
 
 # ------------------------------------------------------------------------------
 # Defaults
@@ -41,6 +42,8 @@ REGEX_DIR_TO_CATEGORY = {
     "ipv4": "IPv4",
     "ipv6": "IPv6",
 }
+
+BETAMAX_ENGINE = get_engine()
 
 
 def create_database(db_path: str) -> None:
@@ -314,34 +317,24 @@ def run_one_betamax(
     else:
         oracle_cmd = None
 
-    cmd = [
-        "python3",
-        "betamax/app/betamax.py",
-        "--positives",
-        pos_file,
-        "--negatives",
-        neg_file,
-        "--grammar-cache",
-        cache_path,
-        "--category",
-        category,
-        "--broken-file",
-        input_file,
-        "--output-file",
-        output_file,
-        "--max-attempts",
-        "500",
-        "--mutations",
-        "0",
-        "--learner",
-        learner,
-    ]
-    if oracle_cmd:
-        cmd += ["--oracle-validator", oracle_cmd]
+    cmd = build_betamax_cmd(
+        engine=BETAMAX_ENGINE,
+        positives=pos_file,
+        negatives=neg_file,
+        cache_path=(cache_path if BETAMAX_ENGINE == "python" else None),
+        category=category,
+        broken_file=input_file,
+        output_file=output_file,
+        attempts=500,
+        mutations=0,
+        learner=learner,
+        oracle_cmd=oracle_cmd,
+    )
 
     env = dict(os.environ)
-    env["BETAMAX_EMIT_METRICS"] = "1"
-    env.setdefault("LSTAR_PARSE_TIMEOUT", os.environ.get("LSTAR_PARSE_TIMEOUT", "100.0"))
+    if BETAMAX_ENGINE == "python":
+        env["BETAMAX_EMIT_METRICS"] = "1"
+        env.setdefault("LSTAR_PARSE_TIMEOUT", os.environ.get("LSTAR_PARSE_TIMEOUT", "100.0"))
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     t0 = time.time()
@@ -366,13 +359,22 @@ def run_one_betamax(
         elapsed = float(timeout_s)
 
     rc = proc.returncode
-    attempts = extract_lstar_attempts(stdout)
-    ec_time = extract_ec_seconds(stdout)
-    ec_ratio = (ec_time / elapsed) if elapsed > 0 else 0.0
-    learn_time = extract_learn_seconds(stdout)
-    learn_ratio = (learn_time / elapsed) if elapsed > 0 else 0.0
-    oracle_time = extract_oracle_seconds(stdout)
-    oracle_ratio = (oracle_time / elapsed) if elapsed > 0 else 0.0
+    if BETAMAX_ENGINE == "python":
+        attempts = extract_lstar_attempts(stdout)
+        ec_time = extract_ec_seconds(stdout)
+        ec_ratio = (ec_time / elapsed) if elapsed > 0 else 0.0
+        learn_time = extract_learn_seconds(stdout)
+        learn_ratio = (learn_time / elapsed) if elapsed > 0 else 0.0
+        oracle_time = extract_oracle_seconds(stdout)
+        oracle_ratio = (oracle_time / elapsed) if elapsed > 0 else 0.0
+    else:
+        attempts = 0
+        ec_time = 0.0
+        ec_ratio = 0.0
+        learn_time = 0.0
+        learn_ratio = 0.0
+        oracle_time = 0.0
+        oracle_ratio = 0.0
 
     repaired_text = ""
     fixed = 0
@@ -426,7 +428,16 @@ def main() -> None:
     ap.add_argument("--resume-only", action="store_true", help="Skip sample insertion; only run unfinished rows")
     ap.add_argument("--learner", default=os.environ.get("BM_BETAMAX_LEARNER", os.environ.get("LSTAR_LEARNER", "rpni")))
     ap.add_argument("--cache-root", default=os.environ.get("LSTAR_CACHE_ROOT", "cache"))
+    ap.add_argument(
+        "--betamax-engine",
+        choices=["python", "cpp"],
+        default=None,
+        help="Select betaMax engine backend (default: env BM_BETAMAX_ENGINE or 'python')",
+    )
     args = ap.parse_args()
+
+    global BETAMAX_ENGINE
+    BETAMAX_ENGINE = get_engine(args.betamax_engine)
 
     create_database(args.db)
 

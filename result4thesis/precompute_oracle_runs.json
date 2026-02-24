@@ -1,0 +1,252 @@
+[
+  {
+    "status": "ok",
+    "oracle_runs": 60,
+    "exit_code": 0,
+    "seconds": 10.957163,
+    "cmd": "betamax_cpp/build/betamax_cpp --positives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_date_pjetsu9q/positives.txt --negatives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_date_pjetsu9q/negatives.txt --category Date --dfa-cache /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_date_pjetsu9q/cache.dfa --init-cache --learner rpni --repo-root . --oracle-validator /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_date_pjetsu9q/oracle_wrapper.py --oracle-timeout-ms 3000 --mutations 60",
+    "oracle_under_cmd": [
+      "validators/validate_date"
+    ],
+    "case": {
+      "fmt": "date",
+      "category": "Date",
+      "mutation_db": "mutated_files/single_date.db",
+      "table": "mutations",
+      "positives_k": 50,
+      "negatives_k": 0,
+      "engine": "cpp",
+      "learner": "rpni",
+      "mutations": 60,
+      "eq_disable_sampling": false,
+      "eq_max_length": null,
+      "eq_samples_per_length": null,
+      "eq_max_oracle": null,
+      "eq_max_rounds": null
+    },
+    "stdout_head": [],
+    "stderr_head": [
+      "[INFO] Loaded positives=50, negatives=0",
+      "[INFO] Mutation augmentation: requested=60, generated=60, accepted=5, rejected=55, skipped=0; totals P=55, N=55",
+      "[INFO] Learned DFA (precompute) states=5, transitions=28 in 58ms",
+      "[INFO] Writing DFA cache: /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_date_pjetsu9q/cache.dfa"
+    ]
+  },
+  {
+    "status": "ok",
+    "oracle_runs": 60,
+    "exit_code": 0,
+    "seconds": 7.078616,
+    "cmd": "betamax_cpp/build/betamax_cpp --positives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_time_jqh2gi75/positives.txt --negatives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_time_jqh2gi75/negatives.txt --category Time --dfa-cache /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_time_jqh2gi75/cache.dfa --init-cache --learner rpni --repo-root . --oracle-validator /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_time_jqh2gi75/oracle_wrapper.py --oracle-timeout-ms 3000 --mutations 60",
+    "oracle_under_cmd": [
+      "validators/validate_time"
+    ],
+    "case": {
+      "fmt": "time",
+      "category": "Time",
+      "mutation_db": "mutated_files/single_time.db",
+      "table": "mutations",
+      "positives_k": 50,
+      "negatives_k": 0,
+      "engine": "cpp",
+      "learner": "rpni",
+      "mutations": 60,
+      "eq_disable_sampling": false,
+      "eq_max_length": null,
+      "eq_samples_per_length": null,
+      "eq_max_oracle": null,
+      "eq_max_rounds": null
+    },
+    "stdout_head": [],
+    "stderr_head": [
+      "[INFO] Loaded positives=50, negatives=0",
+      "[INFO] Mutation augmentation: requested=60, generated=60, accepted=5, rejected=55, skipped=0; totals P=55, N=55",
+      "[INFO] Learned DFA (precompute) states=4, transitions=25 in 28ms",
+      "[INFO] Writing DFA cache: /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_time_jqh2gi75/cache.dfa"
+    ]
+  },
+  {
+    "status": "ok",
+    "oracle_runs": 60,
+    "exit_code": 0,
+    "seconds": 6.015521,
+    "cmd": "betamax_cpp/build/betamax_cpp --positives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_isbn_ov0xczoa/positives.txt --negatives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_isbn_ov0xczoa/negatives.txt --category ISBN --dfa-cache /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_isbn_ov0xczoa/cache.dfa --init-cache --learner rpni --repo-root . --oracle-validator /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_isbn_ov0xczoa/oracle_wrapper.py --oracle-timeout-ms 3000 --mutations 60",
+    "oracle_under_cmd": [
+      "validators/validate_isbn"
+    ],
+    "case": {
+      "fmt": "isbn",
+      "category": "ISBN",
+      "mutation_db": "mutated_files/single_isbn.db",
+      "table": "mutations",
+      "positives_k": 50,
+      "negatives_k": 0,
+      "engine": "cpp",
+      "learner": "rpni",
+      "mutations": 60,
+      "eq_disable_sampling": false,
+      "eq_max_length": null,
+      "eq_samples_per_length": null,
+      "eq_max_oracle": null,
+      "eq_max_rounds": null
+    },
+    "stdout_head": [],
+    "stderr_head": [
+      "[INFO] Loaded positives=50, negatives=0",
+      "[INFO] Mutation augmentation: requested=60, generated=60, accepted=20, rejected=40, skipped=0; totals P=70, N=40",
+      "[INFO] Learned DFA (precompute) states=3, transitions=20 in 41ms",
+      "[INFO] Writing DFA cache: /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_isbn_ov0xczoa/cache.dfa"
+    ]
+  },
+  {
+    "status": "ok",
+    "oracle_runs": 60,
+    "exit_code": 0,
+    "seconds": 4.91583,
+    "cmd": "betamax_cpp/build/betamax_cpp --positives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv4_pwn0zxoa/positives.txt --negatives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv4_pwn0zxoa/negatives.txt --category IPv4 --dfa-cache /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv4_pwn0zxoa/cache.dfa --init-cache --learner rpni --repo-root . --oracle-validator /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv4_pwn0zxoa/oracle_wrapper.py --oracle-timeout-ms 3000 --mutations 60",
+    "oracle_under_cmd": [
+      "validators/validate_ipv4"
+    ],
+    "case": {
+      "fmt": "ipv4",
+      "category": "IPv4",
+      "mutation_db": "mutated_files/single_ipv4.db",
+      "table": "mutations",
+      "positives_k": 50,
+      "negatives_k": 0,
+      "engine": "cpp",
+      "learner": "rpni",
+      "mutations": 60,
+      "eq_disable_sampling": false,
+      "eq_max_length": null,
+      "eq_samples_per_length": null,
+      "eq_max_oracle": null,
+      "eq_max_rounds": null
+    },
+    "stdout_head": [],
+    "stderr_head": [
+      "[INFO] Loaded positives=50, negatives=0",
+      "[INFO] Mutation augmentation: requested=60, generated=60, accepted=36, rejected=24, skipped=0; totals P=86, N=24",
+      "[INFO] Learned DFA (precompute) states=4, transitions=17 in 208ms",
+      "[INFO] Writing DFA cache: /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv4_pwn0zxoa/cache.dfa"
+    ]
+  },
+  {
+    "status": "ok",
+    "oracle_runs": 60,
+    "exit_code": 0,
+    "seconds": 7.225718,
+    "cmd": "betamax_cpp/build/betamax_cpp --positives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_url_w_x9sk3n/positives.txt --negatives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_url_w_x9sk3n/negatives.txt --category URL --dfa-cache /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_url_w_x9sk3n/cache.dfa --init-cache --learner rpni --repo-root . --oracle-validator /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_url_w_x9sk3n/oracle_wrapper.py --oracle-timeout-ms 3000 --mutations 60",
+    "oracle_under_cmd": [
+      "validators/validate_url"
+    ],
+    "case": {
+      "fmt": "url",
+      "category": "URL",
+      "mutation_db": "mutated_files/single_url.db",
+      "table": "mutations",
+      "positives_k": 50,
+      "negatives_k": 0,
+      "engine": "cpp",
+      "learner": "rpni",
+      "mutations": 60,
+      "eq_disable_sampling": false,
+      "eq_max_length": null,
+      "eq_samples_per_length": null,
+      "eq_max_oracle": null,
+      "eq_max_rounds": null
+    },
+    "stdout_head": [],
+    "stderr_head": [
+      "[INFO] Loaded positives=26, negatives=0",
+      "[INFO] Mutation augmentation: requested=60, generated=60, accepted=45, rejected=15, skipped=0; totals P=71, N=15",
+      "[INFO] Learned DFA (precompute) states=3, transitions=36 in 51ms",
+      "[INFO] Writing DFA cache: /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_url_w_x9sk3n/cache.dfa"
+    ]
+  },
+  {
+    "status": "ok",
+    "oracle_runs": 60,
+    "exit_code": 0,
+    "seconds": 5.655645,
+    "cmd": "betamax_cpp/build/betamax_cpp --positives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv6_w9fe93nf/positives.txt --negatives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv6_w9fe93nf/negatives.txt --category IPv6 --dfa-cache /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv6_w9fe93nf/cache.dfa --init-cache --learner rpni --repo-root . --oracle-validator /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv6_w9fe93nf/oracle_wrapper.py --oracle-timeout-ms 3000 --mutations 60",
+    "oracle_under_cmd": [
+      "validators/validate_ipv6"
+    ],
+    "case": {
+      "fmt": "ipv6",
+      "category": "IPv6",
+      "mutation_db": "mutated_files/single_ipv6.db",
+      "table": "mutations",
+      "positives_k": 50,
+      "negatives_k": 0,
+      "engine": "cpp",
+      "learner": "rpni",
+      "mutations": 60,
+      "eq_disable_sampling": false,
+      "eq_max_length": null,
+      "eq_samples_per_length": null,
+      "eq_max_oracle": null,
+      "eq_max_rounds": null
+    },
+    "stdout_head": [],
+    "stderr_head": [
+      "[INFO] Loaded positives=50, negatives=0",
+      "[INFO] Mutation augmentation: requested=60, generated=60, accepted=45, rejected=15, skipped=0; totals P=95, N=15",
+      "[INFO] Learned DFA (precompute) states=2, transitions=20 in 337ms",
+      "[INFO] Writing DFA cache: /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_ipv6_w9fe93nf/cache.dfa"
+    ]
+  },
+  {
+    "status": "ok",
+    "oracle_runs": 59,
+    "exit_code": 0,
+    "seconds": 4.569474,
+    "cmd": "betamax_cpp/build/betamax_cpp --positives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_json_kd5g5mh_/positives.txt --negatives /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_json_kd5g5mh_/negatives.txt --category json --dfa-cache /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_json_kd5g5mh_/cache.dfa --init-cache --learner rpni --repo-root . --oracle-validator /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_json_kd5g5mh_/oracle_wrapper.py --oracle-timeout-ms 3000 --mutations 60",
+    "oracle_under_cmd": [
+      "project/bin/subjects/cjson/cjson"
+    ],
+    "case": {
+      "fmt": "json",
+      "category": "json",
+      "mutation_db": "mutated_files/single_json.db",
+      "table": "mutations",
+      "positives_k": 50,
+      "negatives_k": 0,
+      "engine": "cpp",
+      "learner": "rpni",
+      "mutations": 60,
+      "eq_disable_sampling": false,
+      "eq_max_length": null,
+      "eq_samples_per_length": null,
+      "eq_max_oracle": null,
+      "eq_max_rounds": null
+    },
+    "stdout_head": [
+      "{j\"s\":\"bb\"}Invalid json.",
+      "{\"s\":ab\"}97",
+      "{\"a\"::\"b\":8}}{a\":false}Invalid json.",
+      "{\"a\"[0,5]}{\"a\"i{\"b\":8}}{\"s\":\"ab\"]}{\"s\":\"a\"}[5,6,7,8,][6,7,8,,0]{\"3\":[1,4]}{\"a\":{\"bh\":8}}{\"\"\":\"aa\"}{a\":[0,6]}Invalid json.",
+      "{\"a\":0,\"bn:2}{\"a\":\"0,5]}{\"a\"][0,0]}[6,7,89,0]f{\"s\":\"ai\"}102",
+      "2{\"a\":true}Invalid json.",
+      "[2,j,4,5,6]106",
+      "{\"s\":0\"ba\"}[6,7,e8,9,0]101",
+      "{\"a\":{\"b\":8}}}Invalid json.",
+      "{\"s\":\"aj}\"a\":false}Invalid json.",
+      "{\"s\"9:\"af\"}{a\":[0,1]}Invalid json.",
+      "[5,6,7,,9][2,3,4,5,6t]{\"a\":galse}103",
+      "{\"a\":[0,a4]}97",
+      "f6,7,8,9,0]102",
+      "{\"a\":3,\"b\":5}{\"a\":[0h3]}{\"6\":1,\"b\":4}[9,0i,1,2,3]{\"s\":\"2ai\"}{\"s\"n\"ba\"}{\"a\":0\"b\":3}{\"a\":1,\"b\":5{\"[\":\"ag\"}{\"a\"7:null}[0,1,2,3,41{\"2\":\"ag\"}0{\"a\":0,\"b\":7}Invalid json.",
+      "{\"a\":[1,]}{\"a\":[0{,8]}{\"s\":\"be\"6}{\"a\":[h,2]}104",
+      "[45,6,7,8]{\"t\":1,\"b\":4}{\"s\":\"jaa\"}[4,5c6,7,8]{\"a\":10\"b\":5}[5,6r7,8,9]{us\":\"ba\"}Invalid json.",
+      "{\"a\":[0r3]}{\"a\":[1s0]}"
+    ],
+    "stderr_head": [
+      "[INFO] Loaded positives=50, negatives=0",
+      "[INFO] Mutation augmentation: requested=60, generated=60, accepted=12, rejected=47, skipped=1; totals P=62, N=47",
+      "[INFO] Learned DFA (precompute) states=4, transitions=56 in 43ms",
+      "[INFO] Writing DFA cache: /var/folders/f_/qmwxfvg92w107msl73ly9fd00000gn/T/precompute_oracle_json_kd5g5mh_/cache.dfa"
+    ]
+  }
+]

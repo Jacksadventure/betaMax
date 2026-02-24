@@ -33,3 +33,12 @@ for proj in "${CMAKE_PROJECTS[@]}"; do
 done
 
 echo "All projects built successfully!"
+
+# Build and deploy the Java eRepair tool (includes DDMax).
+if command -v gradle >/dev/null 2>&1; then
+    echo "Building and deploying project/bin/erepair.jar ..."
+    (cd "$BASE_DIR/project" && gradle deployJar)
+    echo "erepair.jar deployed successfully."
+else
+    echo "Gradle not found; skipping erepair.jar build (DDMax will be unavailable)." >&2
+fi
