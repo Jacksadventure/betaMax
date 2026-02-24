@@ -1121,12 +1121,14 @@ def main():
     if "betamax" in REPAIR_ALGORITHMS and should_precompute_cache(BETAMAX_ENGINE):
         os.makedirs(CACHE_ROOT, exist_ok=True)
         cache_learner = _cache_betamax_learner()
+        runtime_learner = _runtime_betamax_learner()
         for mutation_type in (args.mutations if args.mutations else MUTATION_TYPES):
             for fmt in (args.formats if args.formats else DEFAULT_FORMATS):
                 format_key = f"{mutation_type}_{fmt}"
                 # Use shared cache per format across all bm_* (single/double/triple)
                 cache_path = _cache_path(fmt, cache_learner)
-                if os.path.exists(cache_path):
+                # If *any* suitable DFA cache already exists (cache learner or runtime learner), reuse it.
+                if os.path.exists(cache_path) or os.path.exists(_cache_path(fmt, runtime_learner)):
                     continue
                 # Pick a source DB for precompute: prefer env LSTAR_CACHE_SOURCE_MUTATION, else fallback to single/double/triple
                 preferred = os.environ.get("LSTAR_CACHE_SOURCE_MUTATION", "single")
@@ -1217,6 +1219,7 @@ def main():
                             "--init-cache",
                             "--learner", learner_pre,
                             "--repo-root", ".",
+                            "--incremental",
                         ]
                         if oracle_cmd:
                             cmd += ["--oracle-validator", oracle_cmd]

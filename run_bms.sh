@@ -19,7 +19,7 @@ export LSTAR_LEARNER="${LSTAR_LEARNER:-rpni}"
 
 export LSTAR_PARSE_TIMEOUT=600
 export LSTAR_EC_TIMEOUT=600
-export LSTAR_PRECOMPUTE_MUTATIONS=60
+export LSTAR_PRECOMPUTE_MUTATIONS=20
 export BM_NEGATIVES_FROM_DB="${BM_NEGATIVES_FROM_DB:-0}"
 export BETAMAX_DEBUG_ORACLE="${BETAMAX_DEBUG_ORACLE:-0}"
 
@@ -52,6 +52,6 @@ if [[ "$missing_db" != "0" && "${BM_ALLOW_MISSING_MUTATED:-0}" != "1" ]]; then
 fi
 
 # "$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT"
-"$PYTHON_BIN" "bm_single.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats json
+"$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats json
 "$PYTHON_BIN" "bm_multiple.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats json
 "$PYTHON_BIN" "bm_triple.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats json

@@ -179,6 +179,7 @@ struct Options {
   int eq_max_rounds = 0;
   std::optional<uint64_t> seed;
   bool verbose = false;
+  bool incremental = true;
 };
 
 static void print_usage(const char* argv0) {
@@ -217,7 +218,9 @@ static void print_usage(const char* argv0) {
       << "  --eq-max-oracle <int>           (default: 0)\n"
       << "  --eq-max-rounds <int>           (default: 0)\n"
       << "  --seed <uint64>                 (random seed)\n"
-      << "  --verbose                       (more debug output)\n";
+      << "  --verbose                       (more debug output)\n"
+      << "  --incremental                   (default: on; replay successful merges on new negatives)\n"
+      << "  --no-incremental                (disable incremental refinement)\n";
 }
 
 static std::optional<Options> parse_args(int argc, char** argv) {
@@ -293,11 +296,16 @@ static std::optional<Options> parse_args(int argc, char** argv) {
       opt.seed = (uint64_t)std::stoull(need("--seed"));
     } else if (a == "--verbose" || a == "-v") {
       opt.verbose = true;
+    } else if (a == "--incremental") {
+      opt.incremental = true;
+    } else if (a == "--no-incremental") {
+      opt.incremental = false;
     } else {
       throw std::runtime_error("unknown arg: " + a);
     }
   }
   if (getenv_bool("BETAMAX_VERBOSE")) opt.verbose = true;
+  if (getenv_bool("BETAMAX_INCREMENTAL")) opt.incremental = true;
   if (!opt.positives) throw std::runtime_error("--positives is required");
   if (opt.category.empty()) throw std::runtime_error("--category is required");
   if (opt.init_cache) {
@@ -339,36 +347,52 @@ struct DFA {
   }
 };
 
-static bool write_dfa_cache(const fs::path& path, const DFA& dfa) {
+struct DfaCache {
+  DFA dfa;
+  std::string learner;
+  size_t pta_nodes = 0;
+  std::vector<std::pair<int, int>> merge_history;  // (qr, qb) in PTA node ids
+};
+
+static bool write_dfa_cache(const fs::path& path, const DfaCache& cache) {
   std::ofstream out(path, std::ios::binary);
   if (!out) return false;
   out << "BMXDFA1\n";
-  out << dfa.start << "\n";
-  out << dfa.trans.size() << "\n";
-  out << dfa.accept.size() << "\n";
+  out << cache.dfa.start << "\n";
+  out << cache.dfa.trans.size() << "\n";
+  out << cache.dfa.accept.size() << "\n";
   size_t acc_count = 0;
-  for (size_t i = 0; i < dfa.accept.size(); i++) {
-    if (dfa.accept[i]) acc_count++;
+  for (size_t i = 0; i < cache.dfa.accept.size(); i++) {
+    if (cache.dfa.accept[i]) acc_count++;
   }
   out << acc_count;
-  for (size_t i = 0; i < dfa.accept.size(); i++) {
-    if (dfa.accept[i]) out << " " << i;
+  for (size_t i = 0; i < cache.dfa.accept.size(); i++) {
+    if (cache.dfa.accept[i]) out << " " << i;
   }
   out << "\n";
   size_t tcount = 0;
-  for (size_t s = 0; s < dfa.trans.size(); s++) tcount += dfa.trans[s].size();
+  for (size_t s = 0; s < cache.dfa.trans.size(); s++) tcount += cache.dfa.trans[s].size();
   out << tcount << "\n";
-  for (size_t s = 0; s < dfa.trans.size(); s++) {
-    for (const auto& kv : dfa.trans[s]) {
+  for (size_t s = 0; s < cache.dfa.trans.size(); s++) {
+    for (const auto& kv : cache.dfa.trans[s]) {
       int byte = (int)(unsigned char)kv.first;
       out << s << " " << byte << " " << kv.second << "\n";
     }
   }
+
+  // Optional metadata for incremental refinement (backward compatible: readers may ignore trailing tokens).
+  if (!cache.learner.empty()) out << "LEARNER " << cache.learner << "\n";
+  if (cache.pta_nodes > 0) out << "PTA_NODES " << cache.pta_nodes << "\n";
+  if (!cache.merge_history.empty()) {
+    out << "MERGE_HISTORY " << cache.merge_history.size() << "\n";
+    for (const auto& op : cache.merge_history) out << op.first << " " << op.second << "\n";
+  }
+
   out.flush();
   return (bool)out;
 }
 
-static std::optional<DFA> read_dfa_cache(const fs::path& path) {
+static std::optional<DfaCache> read_dfa_cache(const fs::path& path) {
   std::ifstream in(path, std::ios::binary);
   if (!in) return std::nullopt;
   std::string magic;
@@ -412,7 +436,43 @@ static std::optional<DFA> read_dfa_cache(const fs::path& path) {
   if (dfa.start < 0 || (size_t)dfa.start >= nstates) return std::nullopt;
   dfa.trans = std::move(trans);
   dfa.accept = std::move(accept);
-  return dfa;
+
+  DfaCache cache;
+  cache.dfa = std::move(dfa);
+
+  // Parse optional trailing metadata.
+  std::string tag;
+  while (in >> tag) {
+    if (tag == "LEARNER") {
+      std::string v;
+      if (!(in >> v)) break;
+      cache.learner = std::move(v);
+      continue;
+    }
+    if (tag == "PTA_NODES") {
+      size_t v = 0;
+      if (!(in >> v)) break;
+      cache.pta_nodes = v;
+      continue;
+    }
+    if (tag == "MERGE_HISTORY") {
+      size_t k = 0;
+      if (!(in >> k)) break;
+      cache.merge_history.clear();
+      cache.merge_history.reserve(k);
+      for (size_t i = 0; i < k; i++) {
+        int qr = 0;
+        int qb = 0;
+        if (!(in >> qr >> qb)) return std::nullopt;
+        cache.merge_history.emplace_back(qr, qb);
+      }
+      continue;
+    }
+    // Unknown tag; stop parsing.
+    break;
+  }
+
+  return cache;
 }
 
 struct PTA {
@@ -460,7 +520,37 @@ class RPNI {
 
   virtual ~RPNI() = default;
 
+  struct MergeOp {
+    int qr = 0;  // red PTA node id
+    int qb = 0;  // blue PTA node id
+  };
+
+  bool has_merge_history() const { return !merge_history_.empty(); }
+  size_t merge_history_size() const { return merge_history_.size(); }
+  const std::vector<MergeOp>& merge_history() const { return merge_history_; }
+  size_t pta_node_count() const { return pta_.nodes.size(); }
+
+  bool set_merge_history_from_cache(const std::vector<std::pair<int, int>>& ops, size_t expected_pta_nodes) {
+    if (expected_pta_nodes > 0 && expected_pta_nodes != pta_.nodes.size()) return false;
+    merge_history_.clear();
+    merge_history_.reserve(ops.size());
+    for (const auto& op : ops) {
+      int qr = op.first;
+      int qb = op.second;
+      if (qr < 0 || qb < 0) return false;
+      if ((size_t)qr >= pta_.nodes.size() || (size_t)qb >= pta_.nodes.size()) return false;
+      merge_history_.push_back(MergeOp{qr, qb});
+    }
+    return true;
+  }
+
+  virtual void append_negative(const std::string& w) {
+    negatives_.push_back(w);
+    for (char ch : w) pta_.alphabet.insert(ch);
+  }
+
   DFA learn() {
+    merge_history_.clear();
     const int n = (int)pta_.nodes.size();
     std::vector<int> rep(n);
     for (int i = 0; i < n; i++) rep[i] = i;
@@ -487,6 +577,7 @@ class RPNI {
         if (rep_try) {
           rep = std::move(*rep_try);
           merged = true;
+          merge_history_.push_back(MergeOp{qr, qb});
           break;
         }
       }
@@ -498,6 +589,29 @@ class RPNI {
     DFA dfa = materialize(rep);
     if (!consistent_with_negatives(dfa)) {
       // Should not happen; fallback to PTA DFA.
+      std::vector<int> id(n);
+      for (int i = 0; i < n; i++) id[i] = i;
+      return materialize(id);
+    }
+    return dfa;
+  }
+
+  DFA replay_positive_merges() {
+    const int n = (int)pta_.nodes.size();
+    std::vector<int> rep(n);
+    for (int i = 0; i < n; i++) rep[i] = i;
+    for (const auto& op : merge_history_) {
+      int r = find(rep, op.qr);
+      int b = find(rep, op.qb);
+      if (r == b) continue;
+      auto rep_try = try_merge(rep, r, b);
+      if (rep_try) {
+        rep = std::move(*rep_try);
+      }
+    }
+    DFA dfa = materialize(rep);
+    if (!consistent_with_negatives(dfa)) {
+      // Should never happen (skipping merges can't introduce inconsistencies), but be defensive.
       std::vector<int> id(n);
       for (int i = 0; i < n; i++) id[i] = i;
       return materialize(id);
@@ -604,6 +718,7 @@ class RPNI {
   PTA pta_;
   std::vector<std::string> positives_;
   std::vector<std::string> negatives_;
+  std::vector<MergeOp> merge_history_;
 };
 
 class XoverRPNI final : public RPNI {
@@ -625,7 +740,7 @@ class XoverRPNI final : public RPNI {
     index_negative_strings();
   }
 
- protected:
+  protected:
   bool can_merge(const std::vector<int>& rep, int qr, int qb) override {
     if (!is_member_ || max_pairs_ <= 0 || max_checks_ <= 0) return true;
 
@@ -675,6 +790,24 @@ class XoverRPNI final : public RPNI {
   }
 
  private:
+  void index_one_negative(const std::string& w) {
+    int node = 0;
+    negatives_by_node_[node].push_back(w);
+    for (char ch : w) {
+      auto it = pta_.nodes[(size_t)node].next.find(ch);
+      if (it == pta_.nodes[(size_t)node].next.end()) break;
+      node = it->second;
+      negatives_by_node_[node].push_back(w);
+    }
+  }
+
+ public:
+  void append_negative(const std::string& w) override {
+    RPNI::append_negative(w);
+    index_one_negative(w);
+  }
+
+ private:
   std::optional<bool> oracle_accepts(std::string_view word) {
     std::string key(word);
     auto it = oracle_cache_.find(key);
@@ -719,14 +852,7 @@ class XoverRPNI final : public RPNI {
 
   void index_negative_strings() {
     for (const auto& w : negatives_) {
-      int node = 0;
-      negatives_by_node_[node].push_back(w);
-      for (char ch : w) {
-        auto it = pta_.nodes[(size_t)node].next.find(ch);
-        if (it == pta_.nodes[(size_t)node].next.end()) break;
-        node = it->second;
-        negatives_by_node_[node].push_back(w);
-      }
+      index_one_negative(w);
     }
   }
 
@@ -1312,6 +1438,28 @@ static DFA learn_with_learner(
   throw std::runtime_error("unknown --learner (expected rpni or rpni_xover): " + opt.learner);
 }
 
+static std::unique_ptr<RPNI> make_incremental_learner(
+    const Options& opt,
+    const std::vector<std::string>& positives,
+    const std::vector<std::string>& negatives,
+    const Oracle& oracle) {
+  std::string learner = to_lower(opt.learner);
+  if (learner == "rpni") {
+    return std::make_unique<RPNI>(positives, negatives);
+  }
+  if (learner == "rpni_xover") {
+    int pairs = (opt.xover_pairs >= 0) ? opt.xover_pairs : env_int_or("LSTAR_RPNI_XOVER_PAIRS", 50);
+    int checks = (opt.xover_checks >= 0) ? opt.xover_checks : env_int_or("LSTAR_RPNI_XOVER_CHECKS", 10);
+    return std::make_unique<XoverRPNI>(
+        positives,
+        negatives,
+        [&](std::string_view w) { return oracle.validate_text(w); },
+        pairs,
+        checks);
+  }
+  throw std::runtime_error("unknown --learner (expected rpni or rpni_xover): " + opt.learner);
+}
+
 static std::vector<std::vector<std::pair<char, int>>> build_adjacency(const DFA& dfa) {
   std::vector<std::vector<std::pair<char, int>>> adj(dfa.trans.size());
   for (size_t s = 0; s < dfa.trans.size(); s++) {
@@ -1456,8 +1604,24 @@ int main(int argc, char** argv) {
     }
 
     if (opt.init_cache) {
+      DfaCache cache_out;
+      cache_out.learner = to_lower(opt.learner);
+
+      bool samples_changed = false;
+
       auto t0 = std::chrono::steady_clock::now();
-      DFA dfa = learn_with_learner(opt, train_positives, negatives, oracle);
+      DFA dfa;
+      if (opt.incremental) {
+        auto inc = make_incremental_learner(opt, train_positives, negatives, oracle);
+        dfa = inc->learn();
+        cache_out.dfa = dfa;
+        cache_out.pta_nodes = inc->pta_node_count();
+        cache_out.merge_history.reserve(inc->merge_history().size());
+        for (const auto& op : inc->merge_history()) cache_out.merge_history.emplace_back(op.qr, op.qb);
+      } else {
+        dfa = learn_with_learner(opt, train_positives, negatives, oracle);
+        cache_out.dfa = dfa;
+      }
       auto t1 = std::chrono::steady_clock::now();
       auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
       size_t trans_count = 0;
@@ -1508,6 +1672,7 @@ int main(int argc, char** argv) {
         }
 
         if (added_total_neg > 0 || added_total_pos > 0) {
+          samples_changed = true;
           trans_count = 0;
           for (const auto& m : dfa.trans) trans_count += m.size();
           std::cerr << "[INFO] EQ sampling (precompute) added positives=" << added_total_pos << ", negatives=" << added_total_neg << ", oracle_calls=" << oracle_calls
@@ -1515,8 +1680,20 @@ int main(int argc, char** argv) {
         }
       }
 
+      // If EQ sampling changed the dataset, rebuild the merge-history to match the final DFA.
+      if (opt.incremental && samples_changed) {
+        auto inc = make_incremental_learner(opt, train_positives, negatives, oracle);
+        cache_out.dfa = inc->learn();
+        cache_out.pta_nodes = inc->pta_node_count();
+        cache_out.merge_history.clear();
+        cache_out.merge_history.reserve(inc->merge_history().size());
+        for (const auto& op : inc->merge_history()) cache_out.merge_history.emplace_back(op.qr, op.qb);
+      } else {
+        cache_out.dfa = dfa;
+      }
+
       std::cerr << "[INFO] Writing DFA cache: " << opt.dfa_cache->string() << "\n";
-      if (!write_dfa_cache(*opt.dfa_cache, dfa)) {
+      if (!write_dfa_cache(*opt.dfa_cache, cache_out)) {
         std::cerr << "[ERROR] Failed to write DFA cache: " << opt.dfa_cache->string() << "\n";
         return 1;
       }
@@ -1546,16 +1723,40 @@ int main(int argc, char** argv) {
     DFA dfa;
     bool need_learn = true;
     bool loaded_cache = false;
+    std::unique_ptr<RPNI> inc_learner;
     if (opt.dfa_cache && fs::is_regular_file(*opt.dfa_cache)) {
       auto loaded = read_dfa_cache(*opt.dfa_cache);
       if (loaded) {
-        dfa = *loaded;
+        dfa = loaded->dfa;
         need_learn = false;
         loaded_cache = true;
         size_t tc = 0;
         for (const auto& m : dfa.trans) tc += m.size();
         std::cerr << "[INFO] Loaded DFA cache: states=" << dfa.trans.size() << ", transitions=" << tc
                   << " from " << opt.dfa_cache->string() << "\n";
+
+        if (opt.incremental && !loaded->merge_history.empty()) {
+          std::string opt_learner = to_lower(opt.learner);
+          std::string cache_learner = to_lower(loaded->learner);
+          if (!cache_learner.empty() && cache_learner != opt_learner) {
+            if (opt.verbose) {
+              std::cerr << "[WARN] DFA cache merge-history learner mismatch: cache=" << loaded->learner
+                        << " opt=" << opt.learner << " (incremental history ignored)\n";
+            }
+          } else {
+            inc_learner = make_incremental_learner(opt, train_positives, negatives, oracle);
+            bool ok = inc_learner->set_merge_history_from_cache(loaded->merge_history, loaded->pta_nodes);
+            if (!ok) {
+              if (opt.verbose) {
+                std::cerr << "[WARN] DFA cache merge-history not compatible with current PTA (incremental history ignored)\n";
+              }
+              inc_learner.reset();
+            } else if (opt.verbose) {
+              std::cerr << "[INFO] Loaded merge-history from cache: merges=" << loaded->merge_history.size()
+                        << " pta_nodes=" << loaded->pta_nodes << "\n";
+            }
+          }
+        }
       } else {
         std::cerr << "[WARN] Failed to read DFA cache: " << opt.dfa_cache->string() << " (will relearn)\n";
       }
@@ -1567,7 +1768,23 @@ int main(int argc, char** argv) {
       long long ms = 0;
       if (need_learn) {
         auto t0 = std::chrono::steady_clock::now();
-        dfa = learn_with_learner(opt, train_positives, negatives, oracle);
+        if (opt.incremental) {
+          if (!inc_learner) {
+            inc_learner = make_incremental_learner(opt, train_positives, negatives, oracle);
+          }
+          if (!inc_learner->has_merge_history()) {
+            if (opt.verbose) std::cerr << "[INFO] Incremental learner: initial learn+record\n";
+            dfa = inc_learner->learn();
+          } else {
+            if (opt.verbose) {
+              std::cerr << "[INFO] Incremental learner: replaying " << inc_learner->merge_history_size()
+                        << " successful merge(s) with updated negatives\n";
+            }
+            dfa = inc_learner->replay_positive_merges();
+          }
+        } else {
+          dfa = learn_with_learner(opt, train_positives, negatives, oracle);
+        }
         auto t1 = std::chrono::steady_clock::now();
         ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
         loaded_cache = false;
@@ -1634,6 +1851,11 @@ int main(int argc, char** argv) {
           std::cerr << "[INFO] EQ sampling added positives=" << added_total_pos << ", negatives=" << added_total_neg << ", oracle_calls=" << oracle_calls
                     << "; DFA now states=" << dfa.trans.size() << ", transitions=" << trans_count << "\n";
         }
+        // EQ sampling may add new positives (PTA changes) and negatives; keep incremental learner conservative by resetting it.
+        if (opt.incremental && inc_learner && (added_total_neg > 0 || added_total_pos > 0)) {
+          if (opt.verbose) std::cerr << "[INFO] Incremental learner reset due to EQ sampling updates\n";
+          inc_learner.reset();
+        }
       }
 
       // Propose candidate repairs from DFA language near the broken input.
@@ -1692,6 +1914,9 @@ int main(int argc, char** argv) {
       }
       negatives.push_back(*best_rejected);
       std::cerr << "[INFO] Oracle rejected; adding negative counterexample and relearning.\n";
+      if (opt.incremental && inc_learner) {
+        inc_learner->append_negative(*best_rejected);
+      }
       need_learn = true;
     }
 
