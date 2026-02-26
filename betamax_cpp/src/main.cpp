@@ -1738,23 +1738,20 @@ int main(int argc, char** argv) {
         if (opt.incremental && !loaded->merge_history.empty()) {
           std::string opt_learner = to_lower(opt.learner);
           std::string cache_learner = to_lower(loaded->learner);
-          if (!cache_learner.empty() && cache_learner != opt_learner) {
+          if (!cache_learner.empty() && cache_learner != opt_learner && opt.verbose) {
+            std::cerr << "[WARN] DFA cache learner differs from runtime learner: cache=" << loaded->learner
+                      << " opt=" << opt.learner << " (will replay merges under runtime constraints)\n";
+          }
+          inc_learner = make_incremental_learner(opt, train_positives, negatives, oracle);
+          bool ok = inc_learner->set_merge_history_from_cache(loaded->merge_history, loaded->pta_nodes);
+          if (!ok) {
             if (opt.verbose) {
-              std::cerr << "[WARN] DFA cache merge-history learner mismatch: cache=" << loaded->learner
-                        << " opt=" << opt.learner << " (incremental history ignored)\n";
+              std::cerr << "[WARN] DFA cache merge-history not compatible with current PTA (incremental history ignored)\n";
             }
-          } else {
-            inc_learner = make_incremental_learner(opt, train_positives, negatives, oracle);
-            bool ok = inc_learner->set_merge_history_from_cache(loaded->merge_history, loaded->pta_nodes);
-            if (!ok) {
-              if (opt.verbose) {
-                std::cerr << "[WARN] DFA cache merge-history not compatible with current PTA (incremental history ignored)\n";
-              }
-              inc_learner.reset();
-            } else if (opt.verbose) {
-              std::cerr << "[INFO] Loaded merge-history from cache: merges=" << loaded->merge_history.size()
-                        << " pta_nodes=" << loaded->pta_nodes << "\n";
-            }
+            inc_learner.reset();
+          } else if (opt.verbose) {
+            std::cerr << "[INFO] Loaded merge-history from cache: merges=" << loaded->merge_history.size()
+                      << " pta_nodes=" << loaded->pta_nodes << "\n";
           }
         }
       } else {

@@ -139,20 +139,38 @@ def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
 
 
 def _runtime_betamax_learner() -> str:
-    """Return learner name for runtime BETAMAX invocation."""
-    raw = os.environ.get("LSTAR_LEARNER",
-                         os.environ.get("BM_BETAMAX_LEARNER",
-                                        "rpni"))
-    return _normalize_learner_name(raw)
+    """Return learner name for runtime BETAMAX invocation (fixed default for bm_*)."""
+    return "rpni"
 
 
 def _cache_betamax_learner() -> str:
-    """Return learner name for cache/precompute steps."""
-    raw = os.environ.get("LSTAR_CACHE_LEARNER",
-                         os.environ.get("LSTAR_LEARNER",
-                                        os.environ.get("BM_BETAMAX_LEARNER",
-                                                       "rpni_xover")))
-    return _normalize_learner_name(raw)
+    """Return learner name for cache/precompute steps (fixed default for bm_*)."""
+    return "rpni_xover"
+
+
+def _cpp_dfa_cache_ready(cache_path: str) -> bool:
+    """
+    Return True iff the DFA cache exists and includes incremental metadata.
+    We require:
+      - BMXDFA1 header
+      - LEARNER rpni_xover
+      - MERGE_HISTORY (needed for incremental replay in refine loop)
+    """
+    try:
+        if not os.path.isfile(cache_path):
+            return False
+        with open(cache_path, "rb") as f:
+            head = f.readline().decode("ascii", errors="ignore").strip()
+            if head != "BMXDFA1":
+                return False
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            n = min(size, 65536)
+            f.seek(size - n)
+            tail = f.read(n).decode("latin-1", errors="ignore")
+        return ("LEARNER rpni_xover" in tail) and ("MERGE_HISTORY" in tail)
+    except Exception:
+        return False
 
 
 def _normalize_learner_name(name: str) -> str:
@@ -1125,9 +1143,12 @@ def main():
                 format_key = f"{mutation_type}_{fmt}"
                 # Use shared cache per format across all bm_* (single/double/triple)
                 cache_path = _cache_path(fmt, cache_learner)
-                # If *any* suitable DFA cache already exists (cache learner or runtime learner), reuse it.
-                if os.path.exists(cache_path) or os.path.exists(_cache_path(fmt, runtime_learner)):
-                    continue
+                if BETAMAX_ENGINE == "cpp":
+                    if _cpp_dfa_cache_ready(cache_path):
+                        continue
+                else:
+                    if os.path.exists(cache_path):
+                        continue
                 # Pick a source DB for precompute: prefer env LSTAR_CACHE_SOURCE_MUTATION, else fallback to single/double/triple
                 preferred = os.environ.get("LSTAR_CACHE_SOURCE_MUTATION", "single")
                 mutation_db_path = None

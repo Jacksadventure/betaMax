@@ -118,7 +118,6 @@ def build_cmd_cpp(
     max_cost = int(os.environ.get("BM_CPP_MAX_COST", "-1"))
     max_candidates = int(os.environ.get("BM_CPP_MAX_CANDIDATES", "50"))
     attempt_candidates = int(os.environ.get("BM_CPP_ATTEMPT_CANDIDATES", str(max_candidates)))
-    incremental = os.environ.get("BM_CPP_INCREMENTAL", "1").lower() in ("1", "true", "yes")
     cmd = [
         exe,
         "--positives",
@@ -142,8 +141,8 @@ def build_cmd_cpp(
         "--repo-root",
         ".",
     ]
-    # Ensure incremental refine replay is enabled (can be disabled via BM_CPP_INCREMENTAL=0).
-    cmd += ["--incremental" if incremental else "--no-incremental"]
+    # Ensure incremental refine replay is enabled for benchmarks.
+    cmd += ["--incremental"]
     if negatives:
         cmd += ["--negatives", negatives]
     if oracle_cmd:

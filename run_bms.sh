@@ -13,13 +13,16 @@ export LSTAR_PRECOMPUTE_TIMEOUT="${LSTAR_PRECOMPUTE_TIMEOUT:-18000}"
 # 2) For each test sample, start from that cached grammar; if oracle fails and we need to relearn,
 #    fall back to cheaper `rpni` for the iterative loop.
 #
-# Valid values (see `betamax/lstar/betamax.py`): rpni, rpni_nfa, rpni_fuzz, rpni_xover, lstar_oracle
-export LSTAR_CACHE_LEARNER="${LSTAR_CACHE_LEARNER:-rpni_xover}"
-export LSTAR_LEARNER="${LSTAR_LEARNER:-rpni}"
+# Fixed benchmark defaults:
+# - precompute cache with rpni_xover
+# - repair/refine loop uses rpni + incremental replay
+export LSTAR_CACHE_LEARNER="rpni_xover"
+export LSTAR_LEARNER="rpni"
+export BM_BETAMAX_ENGINE="cpp"
 
 export LSTAR_PARSE_TIMEOUT=600
 export LSTAR_EC_TIMEOUT=600
-export LSTAR_PRECOMPUTE_MUTATIONS=20
+export LSTAR_PRECOMPUTE_MUTATIONS=60
 export BM_NEGATIVES_FROM_DB="${BM_NEGATIVES_FROM_DB:-0}"
 export BETAMAX_DEBUG_ORACLE="${BETAMAX_DEBUG_ORACLE:-0}"
 
@@ -52,6 +55,6 @@ if [[ "$missing_db" != "0" && "${BM_ALLOW_MISSING_MUTATED:-0}" != "1" ]]; then
 fi
 
 # "$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT"
-"$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats json
-"$PYTHON_BIN" "bm_multiple.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats json
-"$PYTHON_BIN" "bm_triple.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" --formats json
+"$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" 
+"$PYTHON_BIN" "bm_multiple.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" 
+"$PYTHON_BIN" "bm_triple.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" 

@@ -258,6 +258,16 @@ def _build_precompute_cmd(
     return cmd
 
 
+def _coerce_text(x) -> str:
+    if x is None:
+        return ""
+    if isinstance(x, bytes):
+        return x.decode("utf-8", errors="replace")
+    if isinstance(x, str):
+        return x
+    return str(x)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Measure oracle-validator invocation count during bm-style precompute (--init-cache) per format."
@@ -402,7 +412,12 @@ def main() -> int:
                 proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
             except subprocess.TimeoutExpired as e:
                 timed_out = True
-                proc = subprocess.CompletedProcess(cmd, returncode=124, stdout=e.stdout or "", stderr=e.stderr or "")
+                proc = subprocess.CompletedProcess(
+                    cmd,
+                    returncode=124,
+                    stdout=_coerce_text(e.stdout),
+                    stderr=_coerce_text(e.stderr),
+                )
             dt = time.time() - t0
 
             try:
@@ -436,8 +451,8 @@ def main() -> int:
                     "cmd": " ".join(shlex.quote(x) for x in cmd),
                     "oracle_under_cmd": under_cmd,
                     "case": case.__dict__,
-                    "stdout_head": (proc.stdout or "").splitlines()[:30],
-                    "stderr_head": (proc.stderr or "").splitlines()[:30],
+                    "stdout_head": _coerce_text(getattr(proc, "stdout", "")).splitlines()[:30],
+                    "stderr_head": _coerce_text(getattr(proc, "stderr", "")).splitlines()[:30],
                 }
             )
 
