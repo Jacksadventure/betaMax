@@ -43,6 +43,7 @@ Important top‑level files and directories:
   - `bm_single.py` – run benchmarks on single‑error cases.
   - `bm_multiple.py` – benchmarks for multiple‑error settings.
   - `bm_triple.py` – benchmarks for triple‑error settings.
+  - `bm_truncation.py` – truncation benchmarks (defaults: `--formats json --mutations truncated --algorithms betamax`).
   - `bm_iso8601_mixed500.py` – dedicated ISO8601 mixed benchmark (train=400/test=100) with **no precompute timeout**.
   - `warmup.py` – warm‑up runs and cache precomputation.
   - `mutation_single.py`, `mutation_double.py`, `mutation_triple.py`, `mutation_truncated.py` – mutation generators for building broken inputs from seed data.
@@ -164,6 +165,15 @@ python bm_triple.py
 ```
 
 These evaluate the robustness of the learned automata and repair strategy when the inputs are further from the training distribution (multiple edits/broken positions).
+
+### 4.4. Run truncation benchmarks (JSON)
+
+`bm_truncation.py` will auto-generate `mutated_files/truncated_json.db` via `mutation_truncated.py` if it is missing.
+By default, the truncation mutation DB is derived from `original_files/json_small_data/` (same train/test split logic as `bm_single.py`).
+
+```bash
+python bm_truncation.py --formats json --mutations truncated --algorithms betamax
+```
 
 ### 4.4. Inspecting results
 

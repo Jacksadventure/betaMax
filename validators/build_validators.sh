@@ -4,7 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VALIDATORS_DIR="$ROOT_DIR/validators"
 
-CXX="${CXX:-clang++}"
+: "${CXX:=}"
+if [[ -z "$CXX" ]]; then
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun >/dev/null 2>&1; then
+    CXX="$(xcrun --sdk macosx --find clang++ 2>/dev/null || true)"
+  fi
+  CXX="${CXX:-clang++}"
+fi
 STD_FLAGS=(-std=c++17)
 OPT_FLAGS=(-O3 -DNDEBUG)
 
@@ -45,4 +51,3 @@ for src in "${SOURCES[@]}"; do
 done
 
 echo "[OK] Built ${#SOURCES[@]} validators."
-

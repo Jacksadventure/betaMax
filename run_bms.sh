@@ -55,6 +55,7 @@ if [[ "$missing_db" != "0" && "${BM_ALLOW_MISSING_MUTATED:-0}" != "1" ]]; then
 fi
 
 # "$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT"
-"$PYTHON_BIN" "bm_single.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" 
-"$PYTHON_BIN" "bm_multiple.py" --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" 
-"$PYTHON_BIN" "bm_triple.py"   --max-workers "$MAX_WORKERS" --algorithms betamax --lstar-mutation-count "$BM_LSTAR_MUTATION_COUNT" 
+"$PYTHON_BIN" "bm_truncation.py"   --max-workers "$MAX_WORKERS" --algorithms betamax erepair --formats json
+
+# Truncation benchmark (auto-generates mutated_files/truncated_json.db if missing)
+# "$PYTHON_BIN" "bm_truncation.py" --max-workers "$MAX_WORKERS" --algorithms betamax --formats json
