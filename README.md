@@ -45,6 +45,7 @@ Important top‑level files and directories:
   - `bm_triple.py` – benchmarks for triple‑error settings.
   - `bm_truncation.py` – truncation benchmarks (defaults: `--formats json --mutations truncated --algorithms betamax`).
   - `bm_iso8601_mixed500.py` – dedicated ISO8601 mixed benchmark (train=400/test=100) with **no precompute timeout**.
+  - `bm_xover_checks_ablation.py` – ablation driver for `rpni_xover` cross-check budget (`LSTAR_RPNI_XOVER_CHECKS`) during merge attempts.
   - `warmup.py` – warm‑up runs and cache precomputation.
   - `mutation_single.py`, `mutation_double.py`, `mutation_triple.py`, `mutation_truncated.py` – mutation generators for building broken inputs from seed data.
   - `report.py` – reporting/aggregation utilities for benchmark outputs.

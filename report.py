@@ -57,6 +57,10 @@ BETAMAX_ABLATION_DB_TEMPLATE = "{mode}_k{K}.db"
 BETAMAX_PRECOMP_MUT_ABLATION_MS = [0, 20, 40, 60, 80, 100]
 BETAMAX_PRECOMP_MUT_ABLATION_MODES = ["single", "double", "triple"]
 BETAMAX_PRECOMP_MUT_ABLATION_DB_TEMPLATE = "{mode}_m{M}.db"
+BETAMAX_XOVER_ABLATION_CHECKS = [0, 1, 2, 3]
+BETAMAX_XOVER_ABLATION_PAIRS = [50]
+BETAMAX_XOVER_ABLATION_MODES = ["single", "double", "triple"]
+BETAMAX_XOVER_ABLATION_DB_TEMPLATE = "{mode}_xcheck{checks}.db"
 BETAMAX_LEARNER_DB_PAIRS = [
     ("double_rpni.db", "rpni"),
     ("double_rpni_xover.db", "rpni_xover"),
@@ -240,7 +244,7 @@ def _print_metrics(data):
         arec_br, srec_br = _stats(b.get("rec_br", []))
         art, srt = _stats(b["rt"])
         art_all, srt_all = _stats(b.get("rt_all", []))
-        print(f"{fmt:<8} {alg:<8} {abr:8.2f} {sbr:8.2f} {aor:8.2f} {sor:8.2f} {arec_or:8.2f} {srec_or:8.2f} {arec_br:8.2f} {srec_br:8.2f} "\
+        print(f"{fmt:<8} {alg:<8} {abr:8.2f} {sbr:8.2f} {aor:8.2f} {sor:8.2f} {arec_or:8.4f} {srec_or:8.4f} {arec_br:8.4f} {srec_br:8.4f} "\
               f"{art:8.2f} {srt:8.2f} {art_all:8.2f} {srt_all:8.2f} {b['succ']:6d} {b['tot']:6d}")
 
 # 4‑5 distances --------------------------------------------------------------- #
@@ -274,7 +278,7 @@ def table_4_5_distances():
         abr, sbr = _stats(vals["dbr"]); aor, sor = _stats(vals["dor"])
         arec_or, srec_or = _stats(vals.get("rec_or", []))
         arec_br, srec_br = _stats(vals.get("rec_br", []))
-        print(f"{alg:<8} {abr:8.2f} {sbr:8.2f} {aor:8.2f} {sor:8.2f} {arec_or:9.2f} {srec_or:9.2f} {arec_br:9.2f} {srec_br:9.2f}")
+        print(f"{alg:<8} {abr:8.2f} {sbr:8.2f} {aor:8.2f} {sor:8.2f} {arec_or:9.4f} {srec_or:9.4f} {arec_br:9.4f} {srec_br:9.4f}")
 
 # 6: fixed counts ------------------------------------------------------------- #
 
@@ -706,7 +710,8 @@ def _betamax_metrics_for_db(db: str) -> Optional[Dict[str, Any]]:
     cols = {row[1] for row in _q(conn, "PRAGMA table_info(results)")}
     sel_learn_time = "learn_time" if "learn_time" in cols else "NULL"
     rows = _q(conn,
-              f"SELECT distance_broken_repaired, distance_original_repaired, COALESCE(iterations, 0), {sel_learn_time}, fixed, repair_time "
+              f"SELECT distance_broken_repaired, distance_original_repaired, COALESCE(iterations, 0), {sel_learn_time}, "
+              f"       broken_text, repaired_text, fixed, repair_time "
               f"FROM results WHERE algorithm IN ({placeholders})",
               BETAMAX_ALGORITHMS)
     conn.close()
@@ -714,16 +719,19 @@ def _betamax_metrics_for_db(db: str) -> Optional[Dict[str, Any]]:
         "db": db,
         "dbr": [],
         "dor": [],
+        "recb": [],
         "orc": [],
         "learn": [],
         "succ": 0,
         "tot": len(rows),
     }
-    for dbr, dor, iters, learn_time, fixed, repair_time in rows:
+    for dbr, dor, iters, learn_time, broken_text, repaired_text, fixed, repair_time in rows:
         if fixed and repair_time is not None and repair_time <= DEFAULT_TIMEOUT:
             bucket["succ"] += 1
             bucket["dbr"].append(dbr)
             bucket["dor"].append(dor)
+            if broken_text is not None and repaired_text is not None:
+                bucket["recb"].append(_recovery_ratio(broken_text, repaired_text))
             bucket["orc"].append(float(iters or 0))
             if learn_time is not None:
                 try:
@@ -732,6 +740,7 @@ def _betamax_metrics_for_db(db: str) -> Optional[Dict[str, Any]]:
                     pass
     abr, sbr = _stats(bucket["dbr"])
     aor, sor = _stats(bucket["dor"])
+    arecb, srecb = _stats(bucket["recb"])
     aorc, sorc = _stats(bucket["orc"])
     alearn, slearn = _stats(bucket["learn"])
     bucket.update({
@@ -739,6 +748,8 @@ def _betamax_metrics_for_db(db: str) -> Optional[Dict[str, Any]]:
         "std_br": sbr,
         "avg_or": aor,
         "std_or": sor,
+        "avg_recb": arecb,
+        "std_recb": srecb,
         "avg_orc": aorc,
         "std_orc": sorc,
         "avg_learn": alearn,
@@ -803,27 +814,29 @@ def _betamax_success_distances_for_db(db: str) -> Optional[Dict[Tuple[Any, ...],
 
 def betamax_mutation_comparison():
     print("\nBETAMAX mutate vs non-mutate")
-    hdr = f"{'DB':<24} {'Variant':<10} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} "\
+    hdr = f"{'DB':<24} {'Variant':<10} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg RecB':>9} {'σ RecB':>9} "\
           f"{'Avg orc':>8} {'σ orc':>8} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
     print("-" * len(hdr))
     print(hdr)
     print("-" * len(hdr))
     any_rows = False
     na8 = f"{'n/a':>8}"; na6 = f"{'n/a':>6}"
+    na9 = f"{'n/a':>9}"
     overall: Dict[str, Dict[str, Any]] = {}
     for non_db, mut_db in BETAMAX_MUTATION_DB_PAIRS:
         for variant, db in (("non-mut", non_db), ("mut", mut_db)):
             stats = _betamax_metrics_for_db(db)
             if stats is None:
-                print(f"{db:<24} {variant:<10} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+                print(f"{db:<24} {variant:<10} {na8} {na8} {na8} {na8} {'n/a':>9} {'n/a':>9} {na8} {na8} {na8} {na6} {na6}")
                 continue
             any_rows = True
             has_success = stats["has_success"]
             tot = stats["tot"]
             succ = stats["succ"]
-            agg = overall.setdefault(variant, {"dbr": [], "dor": [], "succ": 0, "tot": 0})
+            agg = overall.setdefault(variant, {"dbr": [], "dor": [], "recb": [], "succ": 0, "tot": 0})
             agg["dbr"].extend(stats["dbr"])
             agg["dor"].extend(stats["dor"])
+            agg["recb"].extend(stats.get("recb", []))
             agg.setdefault("orc", []).extend(stats.get("orc", []))
             agg["succ"] += succ
             agg["tot"]  += tot
@@ -831,12 +844,14 @@ def betamax_mutation_comparison():
             std_br = f"{stats['std_br']:8.2f}" if has_success else f"{'n/a':>8}"
             avg_or = f"{stats['avg_or']:8.2f}" if has_success else f"{'n/a':>8}"
             std_or = f"{stats['std_or']:8.2f}" if has_success else f"{'n/a':>8}"
+            avg_recb = f"{stats['avg_recb']:9.4f}" if has_success else f"{'n/a':>9}"
+            std_recb = f"{stats['std_recb']:9.4f}" if has_success else f"{'n/a':>9}"
             avg_orc = f"{stats['avg_orc']:8.2f}" if has_success else f"{'n/a':>8}"
             std_orc = f"{stats['std_orc']:8.2f}" if has_success else f"{'n/a':>8}"
             succ_pct = f"{stats['succ_rate'] * 100:7.2f}%" if tot else f"{'n/a':>8}"
             succ_str = f"{succ:6d}" if tot else f"{'n/a':>6}"
             tot_str  = f"{tot:6d}"
-            print(f"{db:<24} {variant:<10} {avg_br} {std_br} {avg_or} {std_or} {avg_orc} {std_orc} {succ_pct} {succ_str} {tot_str}")
+            print(f"{db:<24} {variant:<10} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {succ_pct} {succ_str} {tot_str}")
     if not any_rows:
         print("(no BETAMAX rows found in the listed databases)")
         return
@@ -846,10 +861,11 @@ def betamax_mutation_comparison():
     for variant in ("non-mut", "mut"):
         agg = overall.get(variant)
         if not agg:
-            print(f"{'ALL':<24} {variant:<10} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+            print(f"{'ALL':<24} {variant:<10} {na8} {na8} {na8} {na8} {'n/a':>9} {'n/a':>9} {na8} {na8} {na8} {na6} {na6}")
             continue
         abr, sbr = _stats(agg["dbr"])
         aor, sor = _stats(agg["dor"])
+        arecb, srecb = _stats(agg.get("recb", []))
         aorc, sorc = _stats(agg.get("orc", []))
         tot = agg["tot"]
         succ = agg["succ"]
@@ -858,10 +874,12 @@ def betamax_mutation_comparison():
         std_br = f"{sbr:8.2f}" if has_success else f"{'n/a':>8}"
         avg_or = f"{aor:8.2f}" if has_success else f"{'n/a':>8}"
         std_or = f"{sor:8.2f}" if has_success else f"{'n/a':>8}"
+        avg_recb = f"{arecb:9.4f}" if has_success else f"{'n/a':>9}"
+        std_recb = f"{srecb:9.4f}" if has_success else f"{'n/a':>9}"
         avg_orc = f"{aorc:8.2f}" if has_success else f"{'n/a':>8}"
         std_orc = f"{sorc:8.2f}" if has_success else f"{'n/a':>8}"
         succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else f"{'n/a':>8}"
-        print(f"{'ALL':<24} {variant:<10} {avg_br} {std_br} {avg_or} {std_or} {avg_orc} {std_orc} {succ_pct} {succ:6d} {tot:6d}")
+        print(f"{'ALL':<24} {variant:<10} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {succ_pct} {succ:6d} {tot:6d}")
 
 
 def betamax_ablation_comparison():
@@ -884,33 +902,35 @@ def betamax_ablation_comparison():
         return
 
     print("\nBETAMAX learning-set ablation (constant test set)")
-    hdr = f"{'DB':<24} {'Mode':<6} {'K':>4} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
+    hdr = f"{'DB':<24} {'Mode':<6} {'K':>4} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg RecB':>9} {'σ RecB':>9} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
     print("-" * len(hdr))
     print(hdr)
     print("-" * len(hdr))
     na8 = f"{'n/a':>8}"; na6 = f"{'n/a':>6}"
+    na9 = f"{'n/a':>9}"
 
     def _merge_into(agg: Dict[str, Any], stats: Dict[str, Any]) -> None:
         agg["dbr"].extend(stats.get("dbr", []))
         agg["dor"].extend(stats.get("dor", []))
+        agg["recb"].extend(stats.get("recb", []))
         agg["succ"] += int(stats.get("succ", 0))
         agg["tot"] += int(stats.get("tot", 0))
 
     any_rows = False
     per_k: Dict[int, Dict[str, Any]] = {}
-    overall = {"dbr": [], "dor": [], "succ": 0, "tot": 0}
+    overall = {"dbr": [], "dor": [], "recb": [], "succ": 0, "tot": 0}
     per_k_success_dist: Dict[int, Dict[Tuple[Any, ...], Tuple[Any, Any]]] = {}
     for db, k, mode in runs:
         if not Path(db).is_file():
-            print(f"{db:<24} {mode:<6} {k:4d} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+            print(f"{db:<24} {mode:<6} {k:4d} {na8} {na8} {na8} {na8} {'n/a':>9} {'n/a':>9} {na8} {na6} {na6}")
             continue
         stats = _betamax_metrics_for_db(db)
         if stats is None:
-            print(f"{db:<24} {mode:<6} {k:4d} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+            print(f"{db:<24} {mode:<6} {k:4d} {na8} {na8} {na8} {na8} {'n/a':>9} {'n/a':>9} {na8} {na6} {na6}")
             continue
         any_rows = True
         _merge_into(overall, stats)
-        per_k.setdefault(k, {"dbr": [], "dor": [], "succ": 0, "tot": 0})
+        per_k.setdefault(k, {"dbr": [], "dor": [], "recb": [], "succ": 0, "tot": 0})
         _merge_into(per_k[k], stats)
 
         has_success = stats["has_success"]
@@ -920,10 +940,12 @@ def betamax_ablation_comparison():
         std_br = f"{stats['std_br']:8.2f}" if has_success else na8
         avg_or = f"{stats['avg_or']:8.2f}" if has_success else na8
         std_or = f"{stats['std_or']:8.2f}" if has_success else na8
+        avg_recb = f"{stats['avg_recb']:9.4f}" if has_success else f"{'n/a':>9}"
+        std_recb = f"{stats['std_recb']:9.4f}" if has_success else f"{'n/a':>9}"
         succ_pct = f"{stats['succ_rate'] * 100:7.2f}%" if tot else na8
         succ_str = f"{succ:6d}" if tot else na6
         tot_str = f"{tot:6d}"
-        print(f"{db:<24} {mode:<6} {k:4d} {avg_br} {std_br} {avg_or} {std_or} {succ_pct} {succ_str} {tot_str}")
+        print(f"{db:<24} {mode:<6} {k:4d} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {succ_pct} {succ_str} {tot_str}")
 
         if k in (50, 25):
             succ_map = _betamax_success_distances_for_db(db) or {}
@@ -938,15 +960,16 @@ def betamax_ablation_comparison():
 
     print("-" * len(hdr))
     print("Mutations combined (single+double+triple), grouped by K")
-    hdr2 = f"{'K':>4} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
+    hdr2 = f"{'K':>4} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg RecB':>9} {'σ RecB':>9} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
     print("-" * len(hdr2))
     print(hdr2)
     print("-" * len(hdr2))
     ks_to_show = BETAMAX_ABLATION_KS if (not BETAMAX_ABLATION_DBS and has_template) else sorted(per_k.keys())
     for k in ks_to_show:
-        agg = per_k.get(k, {"dbr": [], "dor": [], "succ": 0, "tot": 0})
+        agg = per_k.get(k, {"dbr": [], "dor": [], "recb": [], "succ": 0, "tot": 0})
         abr, sbr = _stats(agg["dbr"])
         aor, sor = _stats(agg["dor"])
+        arecb, srecb = _stats(agg["recb"])
         tot = agg["tot"]
         succ = agg["succ"]
         has_success = len(agg["dbr"]) > 0
@@ -954,11 +977,14 @@ def betamax_ablation_comparison():
         std_br = f"{sbr:8.2f}" if has_success else na8
         avg_or = f"{aor:8.2f}" if has_success else na8
         std_or = f"{sor:8.2f}" if has_success else na8
+        avg_recb = f"{arecb:9.4f}" if has_success else f"{'n/a':>9}"
+        std_recb = f"{srecb:9.4f}" if has_success else f"{'n/a':>9}"
         succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
-        print(f"{k:4d} {avg_br} {std_br} {avg_or} {std_or} {succ_pct} {succ:6d} {tot:6d}")
+        print(f"{k:4d} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {succ_pct} {succ:6d} {tot:6d}")
     print("-" * len(hdr2))
     abr, sbr = _stats(overall["dbr"])
     aor, sor = _stats(overall["dor"])
+    arecb, srecb = _stats(overall["recb"])
     tot = overall["tot"]
     succ = overall["succ"]
     has_success = len(overall["dbr"]) > 0
@@ -966,8 +992,10 @@ def betamax_ablation_comparison():
     std_br = f"{sbr:8.2f}" if has_success else na8
     avg_or = f"{aor:8.2f}" if has_success else na8
     std_or = f"{sor:8.2f}" if has_success else na8
+    avg_recb = f"{arecb:9.4f}" if has_success else f"{'n/a':>9}"
+    std_recb = f"{srecb:9.4f}" if has_success else f"{'n/a':>9}"
     succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
-    print(f"{'ALL':>4} {avg_br} {std_br} {avg_or} {std_or} {succ_pct} {succ:6d} {tot:6d}")
+    print(f"{'ALL':>4} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {succ_pct} {succ:6d} {tot:6d}")
 
     if 50 in per_k_success_dist and 25 in per_k_success_dist:
         common_keys = set(per_k_success_dist[50]) & set(per_k_success_dist[25])
@@ -996,7 +1024,7 @@ def betamax_learner_comparison():
     if not BETAMAX_LEARNER_DB_PAIRS:
         return
     print("\nBETAMAX learner comparison (rpni vs rpni_xover)")
-    hdr = f"{'DB':<24} {'Learner':<12} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
+    hdr = f"{'DB':<24} {'Learner':<12} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg RecB':>9} {'σ RecB':>9} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
     print("-" * len(hdr))
     print(hdr)
     print("-" * len(hdr))
@@ -1006,12 +1034,13 @@ def betamax_learner_comparison():
     for db, learner in BETAMAX_LEARNER_DB_PAIRS:
         stats = _betamax_metrics_for_db(db)
         if stats is None:
-            print(f"{db:<24} {learner:<12} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+            print(f"{db:<24} {learner:<12} {na8} {na8} {na8} {na8} {'n/a':>9} {'n/a':>9} {na8} {na6} {na6}")
             continue
         any_rows = True
-        buckets.setdefault(learner, {"dbr": [], "dor": [], "succ": 0, "tot": 0})
+        buckets.setdefault(learner, {"dbr": [], "dor": [], "recb": [], "succ": 0, "tot": 0})
         buckets[learner]["dbr"].extend(stats["dbr"])
         buckets[learner]["dor"].extend(stats["dor"])
+        buckets[learner]["recb"].extend(stats.get("recb", []))
         buckets[learner]["succ"] += stats["succ"]
         buckets[learner]["tot"]  += stats["tot"]
         has_success = stats["has_success"]
@@ -1021,9 +1050,11 @@ def betamax_learner_comparison():
         std_br = f"{stats['std_br']:8.2f}" if has_success else na8
         avg_or = f"{stats['avg_or']:8.2f}" if has_success else na8
         std_or = f"{stats['std_or']:8.2f}" if has_success else na8
+        avg_recb = f"{stats['avg_recb']:9.4f}" if has_success else f"{'n/a':>9}"
+        std_recb = f"{stats['std_recb']:9.4f}" if has_success else f"{'n/a':>9}"
         succ_pct = f"{stats['succ_rate'] * 100:7.2f}%" if tot else na8
         succ_str = f"{succ:6d}" if tot else na6
-        print(f"{db:<24} {learner:<12} {avg_br} {std_br} {avg_or} {std_or} {succ_pct} {succ_str} {tot:6d}")
+        print(f"{db:<24} {learner:<12} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {succ_pct} {succ_str} {tot:6d}")
     if not any_rows:
         print("(no BETAMAX rows found for learner DBs)")
         return
@@ -1031,10 +1062,11 @@ def betamax_learner_comparison():
     for learner_name in sorted({l for _, l in BETAMAX_LEARNER_DB_PAIRS}):
         agg = buckets.get(learner_name)
         if not agg:
-            print(f"{'ALL':<24} {learner_name:<12} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+            print(f"{'ALL':<24} {learner_name:<12} {na8} {na8} {na8} {na8} {'n/a':>9} {'n/a':>9} {na8} {na6} {na6}")
             continue
         abr, sbr = _stats(agg["dbr"])
         aor, sor = _stats(agg["dor"])
+        arecb, srecb = _stats(agg["recb"])
         tot = agg["tot"]
         succ = agg["succ"]
         has_success = len(agg["dbr"]) > 0
@@ -1042,8 +1074,10 @@ def betamax_learner_comparison():
         std_br = f"{sbr:8.2f}" if has_success else na8
         avg_or = f"{aor:8.2f}" if has_success else na8
         std_or = f"{sor:8.2f}" if has_success else na8
+        avg_recb = f"{arecb:9.4f}" if has_success else f"{'n/a':>9}"
+        std_recb = f"{srecb:9.4f}" if has_success else f"{'n/a':>9}"
         succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
-    print(f"{'ALL':<24} {learner_name:<12} {avg_br} {std_br} {avg_or} {std_or} {succ_pct} {succ:6d} {tot:6d}")
+    print(f"{'ALL':<24} {learner_name:<12} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {succ_pct} {succ:6d} {tot:6d}")
 
 
 def betamax_precompute_mutation_ablation_comparison():
@@ -1068,6 +1102,7 @@ def betamax_precompute_mutation_ablation_comparison():
     hdr = (
         f"{'DB':<24} {'Mode':<6} {'m':>4} "
         f"{'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} "
+        f"{'Avg RecB':>9} {'σ RecB':>9} "
         f"{'Avg orc':>8} {'σ orc':>8} "
         f"{'Avg learn':>9} {'σ learn':>9} "
         f"{'Succ%':>8} {'Succ':>6} {'Tot':>6}"
@@ -1076,10 +1111,12 @@ def betamax_precompute_mutation_ablation_comparison():
     print(hdr)
     print("-" * len(hdr))
     na8 = f"{'n/a':>8}"; na6 = f"{'n/a':>6}"
+    na9 = f"{'n/a':>9}"
 
     def _merge_into(agg: Dict[str, Any], stats: Dict[str, Any]) -> None:
         agg["dbr"].extend(stats.get("dbr", []))
         agg["dor"].extend(stats.get("dor", []))
+        agg["recb"].extend(stats.get("recb", []))
         agg["orc"].extend(stats.get("orc", []))
         agg["learn"].extend(stats.get("learn", []))
         agg["succ"] += int(stats.get("succ", 0))
@@ -1087,18 +1124,18 @@ def betamax_precompute_mutation_ablation_comparison():
 
     any_rows = False
     per_m: Dict[int, Dict[str, Any]] = {}
-    overall = {"dbr": [], "dor": [], "orc": [], "learn": [], "succ": 0, "tot": 0}
+    overall = {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0}
     for db, m, mode in runs:
         if not Path(db).is_file():
-            print(f"{db:<24} {mode:<6} {m:4d} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+            print(f"{db:<24} {mode:<6} {m:4d} {na8} {na8} {na8} {na8} {na9} {na9} {na8} {na8} {na9} {na9} {na8} {na6} {na6}")
             continue
         stats = _betamax_metrics_for_db(db)
         if stats is None:
-            print(f"{db:<24} {mode:<6} {m:4d} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na8} {na6} {na6}")
+            print(f"{db:<24} {mode:<6} {m:4d} {na8} {na8} {na8} {na8} {na9} {na9} {na8} {na8} {na9} {na9} {na8} {na6} {na6}")
             continue
 
         any_rows = True
-        per_m.setdefault(m, {"dbr": [], "dor": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
+        per_m.setdefault(m, {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
         _merge_into(per_m[m], stats)
         _merge_into(overall, stats)
 
@@ -1109,14 +1146,16 @@ def betamax_precompute_mutation_ablation_comparison():
         std_br = f"{stats['std_br']:8.2f}" if has_success else na8
         avg_or = f"{stats['avg_or']:8.2f}" if has_success else na8
         std_or = f"{stats['std_or']:8.2f}" if has_success else na8
+        avg_recb = f"{stats['avg_recb']:9.4f}" if has_success else na9
+        std_recb = f"{stats['std_recb']:9.4f}" if has_success else na9
         avg_orc = f"{stats['avg_orc']:8.2f}" if has_success else na8
         std_orc = f"{stats['std_orc']:8.2f}" if has_success else na8
-        avg_learn = f"{stats['avg_learn']:9.2f}" if has_success else f"{'n/a':>9}"
-        std_learn = f"{stats['std_learn']:9.2f}" if has_success else f"{'n/a':>9}"
+        avg_learn = f"{stats['avg_learn']:9.2f}" if has_success else na9
+        std_learn = f"{stats['std_learn']:9.2f}" if has_success else na9
         succ_pct = f"{stats['succ_rate'] * 100:7.2f}%" if tot else na8
         succ_str = f"{succ:6d}" if tot else na6
         tot_str = f"{tot:6d}"
-        print(f"{db:<24} {mode:<6} {m:4d} {avg_br} {std_br} {avg_or} {std_or} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ_str} {tot_str}")
+        print(f"{db:<24} {mode:<6} {m:4d} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ_str} {tot_str}")
 
     if not any_rows:
         print("(no BETAMAX rows found for precompute-mutation ablation DBs)")
@@ -1124,15 +1163,16 @@ def betamax_precompute_mutation_ablation_comparison():
 
     print("-" * len(hdr))
     print("Mutations combined (single+double+triple), grouped by m")
-    hdr2 = f"{'m':>4} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg orc':>8} {'σ orc':>8} {'Avg learn':>9} {'σ learn':>9} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
+    hdr2 = f"{'m':>4} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg RecB':>9} {'σ RecB':>9} {'Avg orc':>8} {'σ orc':>8} {'Avg learn':>9} {'σ learn':>9} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
     print("-" * len(hdr2))
     print(hdr2)
     print("-" * len(hdr2))
 
     for m in BETAMAX_PRECOMP_MUT_ABLATION_MS:
-        agg = per_m.get(m, {"dbr": [], "dor": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
+        agg = per_m.get(m, {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
         abr, sbr = _stats(agg["dbr"])
         aor, sor = _stats(agg["dor"])
+        arecb, srecb = _stats(agg["recb"])
         aorc, sorc = _stats(agg["orc"])
         alearn, slearn = _stats(agg["learn"])
         tot = agg["tot"]
@@ -1142,16 +1182,19 @@ def betamax_precompute_mutation_ablation_comparison():
         std_br = f"{sbr:8.2f}" if has_success else na8
         avg_or = f"{aor:8.2f}" if has_success else na8
         std_or = f"{sor:8.2f}" if has_success else na8
+        avg_recb = f"{arecb:9.4f}" if has_success else na9
+        std_recb = f"{srecb:9.4f}" if has_success else na9
         avg_orc = f"{aorc:8.2f}" if has_success else na8
         std_orc = f"{sorc:8.2f}" if has_success else na8
-        avg_learn = f"{alearn:9.2f}" if has_success else f"{'n/a':>9}"
-        std_learn = f"{slearn:9.2f}" if has_success else f"{'n/a':>9}"
+        avg_learn = f"{alearn:9.2f}" if has_success else na9
+        std_learn = f"{slearn:9.2f}" if has_success else na9
         succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
-        print(f"{m:4d} {avg_br} {std_br} {avg_or} {std_or} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ:6d} {tot:6d}")
+        print(f"{m:4d} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ:6d} {tot:6d}")
 
     print("-" * len(hdr2))
     abr, sbr = _stats(overall["dbr"])
     aor, sor = _stats(overall["dor"])
+    arecb, srecb = _stats(overall["recb"])
     aorc, sorc = _stats(overall["orc"])
     alearn, slearn = _stats(overall["learn"])
     tot = overall["tot"]
@@ -1161,12 +1204,192 @@ def betamax_precompute_mutation_ablation_comparison():
     std_br = f"{sbr:8.2f}" if has_success else na8
     avg_or = f"{aor:8.2f}" if has_success else na8
     std_or = f"{sor:8.2f}" if has_success else na8
+    avg_recb = f"{arecb:9.4f}" if has_success else na9
+    std_recb = f"{srecb:9.4f}" if has_success else na9
     avg_orc = f"{aorc:8.2f}" if has_success else na8
     std_orc = f"{sorc:8.2f}" if has_success else na8
-    avg_learn = f"{alearn:9.2f}" if has_success else f"{'n/a':>9}"
-    std_learn = f"{slearn:9.2f}" if has_success else f"{'n/a':>9}"
+    avg_learn = f"{alearn:9.2f}" if has_success else na9
+    std_learn = f"{slearn:9.2f}" if has_success else na9
     succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
-    print(f"{'ALL':>4} {avg_br} {std_br} {avg_or} {std_or} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ:6d} {tot:6d}")
+    print(f"{'ALL':>4} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ:6d} {tot:6d}")
+
+
+def betamax_xover_ablation_comparison():
+    """
+    Ablation over rpni_xover cross-check budget.
+
+    Expected DB naming from `bm_xover_checks_ablation.py`:
+      {mode}_xcheck{checks}.db
+    or a custom template that may also include {pairs}.
+    """
+    has_cfg = bool(BETAMAX_XOVER_ABLATION_CHECKS) and bool(BETAMAX_XOVER_ABLATION_MODES) and bool(BETAMAX_XOVER_ABLATION_DB_TEMPLATE)
+    if not has_cfg:
+        return
+
+    runs: List[Tuple[str, int, int, str]] = []
+    for pairs in BETAMAX_XOVER_ABLATION_PAIRS:
+        for checks in BETAMAX_XOVER_ABLATION_CHECKS:
+            for mode in BETAMAX_XOVER_ABLATION_MODES:
+                db = BETAMAX_XOVER_ABLATION_DB_TEMPLATE.format(
+                    mode=mode,
+                    checks=checks,
+                    check=checks,
+                    pairs=pairs,
+                    pair=pairs,
+                    p=pairs,
+                )
+                runs.append((db, checks, pairs, mode))
+
+    print("\nBETAMAX xover ablation (LSTAR_RPNI_XOVER_CHECKS / LSTAR_RPNI_XOVER_PAIRS)")
+    hdr = (
+        f"{'DB':<28} {'Mode':<6} {'checks':>7} {'pairs':>6} "
+        f"{'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} "
+        f"{'Avg RecB':>9} {'σ RecB':>9} "
+        f"{'Avg orc':>8} {'σ orc':>8} "
+        f"{'Avg learn':>9} {'σ learn':>9} "
+        f"{'Succ%':>8} {'Succ':>6} {'Tot':>6}"
+    )
+    print("-" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
+    na8 = f"{'n/a':>8}"; na6 = f"{'n/a':>6}"
+    na9 = f"{'n/a':>9}"
+
+    def _merge_into(agg: Dict[str, Any], stats: Dict[str, Any]) -> None:
+        agg["dbr"].extend(stats.get("dbr", []))
+        agg["dor"].extend(stats.get("dor", []))
+        agg["recb"].extend(stats.get("recb", []))
+        agg["orc"].extend(stats.get("orc", []))
+        agg["learn"].extend(stats.get("learn", []))
+        agg["succ"] += int(stats.get("succ", 0))
+        agg["tot"] += int(stats.get("tot", 0))
+
+    any_rows = False
+    per_checks: Dict[int, Dict[str, Any]] = {}
+    per_pairs: Dict[int, Dict[str, Any]] = {}
+    per_budget: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    overall = {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0}
+
+    for db, checks, pairs, mode in runs:
+        if not Path(db).is_file():
+            print(f"{db:<28} {mode:<6} {checks:7d} {pairs:6d} {na8} {na8} {na8} {na8} {na9} {na9} {na8} {na8} {na9} {na9} {na8} {na6} {na6}")
+            continue
+        stats = _betamax_metrics_for_db(db)
+        if stats is None:
+            print(f"{db:<28} {mode:<6} {checks:7d} {pairs:6d} {na8} {na8} {na8} {na8} {na9} {na9} {na8} {na8} {na9} {na9} {na8} {na6} {na6}")
+            continue
+
+        any_rows = True
+        per_checks.setdefault(checks, {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
+        per_pairs.setdefault(pairs, {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
+        per_budget.setdefault((pairs, checks), {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
+        _merge_into(per_checks[checks], stats)
+        _merge_into(per_pairs[pairs], stats)
+        _merge_into(per_budget[(pairs, checks)], stats)
+        _merge_into(overall, stats)
+
+        has_success = stats["has_success"]
+        tot = stats["tot"]
+        succ = stats["succ"]
+        avg_br = f"{stats['avg_br']:8.2f}" if has_success else na8
+        std_br = f"{stats['std_br']:8.2f}" if has_success else na8
+        avg_or = f"{stats['avg_or']:8.2f}" if has_success else na8
+        std_or = f"{stats['std_or']:8.2f}" if has_success else na8
+        avg_recb = f"{stats['avg_recb']:9.4f}" if has_success else na9
+        std_recb = f"{stats['std_recb']:9.4f}" if has_success else na9
+        avg_orc = f"{stats['avg_orc']:8.2f}" if has_success else na8
+        std_orc = f"{stats['std_orc']:8.2f}" if has_success else na8
+        avg_learn = f"{stats['avg_learn']:9.2f}" if has_success else na9
+        std_learn = f"{stats['std_learn']:9.2f}" if has_success else na9
+        succ_pct = f"{stats['succ_rate'] * 100:7.2f}%" if tot else na8
+        succ_str = f"{succ:6d}" if tot else na6
+        tot_str = f"{tot:6d}"
+        print(f"{db:<28} {mode:<6} {checks:7d} {pairs:6d} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ_str} {tot_str}")
+
+    if not any_rows:
+        print("(no BETAMAX rows found for xover ablation DBs)")
+        return
+
+    print("-" * len(hdr))
+    print("Mutations combined (single+double+triple), grouped by checks")
+    hdr2 = f"{'checks':>7} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg RecB':>9} {'σ RecB':>9} {'Avg orc':>8} {'σ orc':>8} {'Avg learn':>9} {'σ learn':>9} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
+    print("-" * len(hdr2))
+    print(hdr2)
+    print("-" * len(hdr2))
+    for checks in BETAMAX_XOVER_ABLATION_CHECKS:
+        agg = per_checks.get(checks, {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
+        abr, sbr = _stats(agg["dbr"])
+        aor, sor = _stats(agg["dor"])
+        arecb, srecb = _stats(agg["recb"])
+        aorc, sorc = _stats(agg["orc"])
+        alearn, slearn = _stats(agg["learn"])
+        tot = agg["tot"]
+        succ = agg["succ"]
+        has_success = len(agg["dbr"]) > 0
+        avg_br = f"{abr:8.2f}" if has_success else na8
+        std_br = f"{sbr:8.2f}" if has_success else na8
+        avg_or = f"{aor:8.2f}" if has_success else na8
+        std_or = f"{sor:8.2f}" if has_success else na8
+        avg_recb = f"{arecb:9.4f}" if has_success else na9
+        std_recb = f"{srecb:9.4f}" if has_success else na9
+        avg_orc = f"{aorc:8.2f}" if has_success else na8
+        std_orc = f"{sorc:8.2f}" if has_success else na8
+        avg_learn = f"{alearn:9.2f}" if has_success else na9
+        std_learn = f"{slearn:9.2f}" if has_success else na9
+        succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
+        print(f"{checks:7d} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ:6d} {tot:6d}")
+
+    if len(set(BETAMAX_XOVER_ABLATION_PAIRS)) > 1:
+        print("-" * len(hdr2))
+        print("Mutations combined, grouped by pairs")
+        hdr3 = f"{'pairs':>6} {'Avg BR':>8} {'σ BR':>8} {'Avg OR':>8} {'σ OR':>8} {'Avg RecB':>9} {'σ RecB':>9} {'Avg orc':>8} {'σ orc':>8} {'Avg learn':>9} {'σ learn':>9} {'Succ%':>8} {'Succ':>6} {'Tot':>6}"
+        print("-" * len(hdr3))
+        print(hdr3)
+        print("-" * len(hdr3))
+        for pairs in BETAMAX_XOVER_ABLATION_PAIRS:
+            agg = per_pairs.get(pairs, {"dbr": [], "dor": [], "recb": [], "orc": [], "learn": [], "succ": 0, "tot": 0})
+            abr, sbr = _stats(agg["dbr"])
+            aor, sor = _stats(agg["dor"])
+            arecb, srecb = _stats(agg["recb"])
+            aorc, sorc = _stats(agg["orc"])
+            alearn, slearn = _stats(agg["learn"])
+            tot = agg["tot"]
+            succ = agg["succ"]
+            has_success = len(agg["dbr"]) > 0
+            avg_br = f"{abr:8.2f}" if has_success else na8
+            std_br = f"{sbr:8.2f}" if has_success else na8
+            avg_or = f"{aor:8.2f}" if has_success else na8
+            std_or = f"{sor:8.2f}" if has_success else na8
+            avg_recb = f"{arecb:9.4f}" if has_success else na9
+            std_recb = f"{srecb:9.4f}" if has_success else na9
+            avg_orc = f"{aorc:8.2f}" if has_success else na8
+            std_orc = f"{sorc:8.2f}" if has_success else na8
+            avg_learn = f"{alearn:9.2f}" if has_success else na9
+            std_learn = f"{slearn:9.2f}" if has_success else na9
+            succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
+            print(f"{pairs:6d} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ:6d} {tot:6d}")
+
+    print("-" * len(hdr2))
+    abr, sbr = _stats(overall["dbr"])
+    aor, sor = _stats(overall["dor"])
+    arecb, srecb = _stats(overall["recb"])
+    aorc, sorc = _stats(overall["orc"])
+    alearn, slearn = _stats(overall["learn"])
+    tot = overall["tot"]
+    succ = overall["succ"]
+    has_success = len(overall["dbr"]) > 0
+    avg_br = f"{abr:8.2f}" if has_success else na8
+    std_br = f"{sbr:8.2f}" if has_success else na8
+    avg_or = f"{aor:8.2f}" if has_success else na8
+    std_or = f"{sor:8.2f}" if has_success else na8
+    avg_recb = f"{arecb:9.4f}" if has_success else na9
+    std_recb = f"{srecb:9.4f}" if has_success else na9
+    avg_orc = f"{aorc:8.2f}" if has_success else na8
+    std_orc = f"{sorc:8.2f}" if has_success else na8
+    avg_learn = f"{alearn:9.2f}" if has_success else na9
+    std_learn = f"{slearn:9.2f}" if has_success else na9
+    succ_pct = f"{(succ / tot) * 100:7.2f}%" if tot else na8
+    print(f"{'ALL':>7} {avg_br} {std_br} {avg_or} {std_or} {avg_recb} {std_recb} {avg_orc} {std_orc} {avg_learn} {std_learn} {succ_pct} {succ:6d} {tot:6d}")
 
 def _cumulative_success_curve(iterations: List[int], fixed_flags: List[int]) -> Tuple[List[int], List[float]]:
     """
@@ -1530,6 +1753,8 @@ if __name__ == "__main__":
     betamax_learner_comparison()
     print("———— BETAMAX precompute m —————")
     betamax_precompute_mutation_ablation_comparison()
+    print("———— BETAMAX xover budget —————")
+    betamax_xover_ablation_comparison()
     # print("———— Table 4‑5 (data survive) ——————————")
     # table_surviving_ratio()
     print("———— count repaired —————————")
