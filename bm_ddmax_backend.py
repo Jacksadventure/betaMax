@@ -4,10 +4,15 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
+
+
+def _python_bin_for_oracle() -> str:
+    return os.environ.get("PYTHON_BIN") or sys.executable or "python3"
 
 
 def select_regex_oracle_cmd(base_format: str, category: str) -> List[str]:
@@ -23,7 +28,12 @@ def select_regex_oracle_cmd(base_format: str, category: str) -> List[str]:
         return [validator_bin]
     if os.path.exists(wrapper):
         return [wrapper]
-    return ["python3", "match.py", category]
+    return [_python_bin_for_oracle(), "match.py", category]
+
+
+def select_regex_oracle_arg(base_format: str, category: str) -> str:
+    """Return the oracle command formatted for CLI arguments like --oracle-validator."""
+    return shlex.join(select_regex_oracle_cmd(base_format, category))
 
 
 def oracle_cmd_from_env_or_default(default_cmd: List[str]) -> List[str]:
@@ -285,4 +295,3 @@ def ddmax_repair_by_deletion(
         timed_out=timed_out,
     )
     return repaired, stats
-

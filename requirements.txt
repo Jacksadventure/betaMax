@@ -1,6 +1,13 @@
-# Top-level requirements for the EarlyRepairer Python components
+# Runtime dependencies for the benchmark runners and utilities in this checkout.
+#
+# The legacy Python betaMax backend referenced by some scripts is not bundled
+# here, so the supported quickstart path uses the C++ backend under betamax_cpp/.
 
-# L* learner and its runtime dependencies are managed inside betamax.
-# They are provided as local wheels under betamax/py/.
-# Install them via the nested requirements file:
--r betamax/requirements-local.txt
+# Used by match.py, which is the fallback oracle for regex benchmarks.
+regex>=2024.0.0
+
+# Used by report.py.
+matplotlib>=3.8.0
+
+# Used by data_fetch.py.
+requests>=2.31.0

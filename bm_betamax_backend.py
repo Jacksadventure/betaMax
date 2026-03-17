@@ -3,7 +3,7 @@
 Shared helpers for invoking betaMax from benchmark scripts.
 
 Supported engines:
-  - "python": calls betamax/app/betamax.py (original engine)
+  - "python": calls the legacy Python betaMax entrypoint
   - "cpp":    calls betamax_cpp/build/betamax_cpp (C++ engine)
 """
 
@@ -44,6 +44,10 @@ def cpp_bin_path() -> str:
     return os.environ.get("BM_BETAMAX_CPP_BIN", "betamax_cpp/build/betamax_cpp")
 
 
+def python_entrypoint_path() -> str:
+    return os.environ.get("BM_BETAMAX_PY_ENTRYPOINT", "betamax/app/betamax.py")
+
+
 def _eq_flags_from_env() -> list[str]:
     flags: list[str] = []
     if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
@@ -72,9 +76,17 @@ def build_cmd_python(
     learner: str,
     oracle_cmd: Optional[str],
 ) -> list[str]:
+    entrypoint = python_entrypoint_path()
+    if not os.path.exists(entrypoint):
+        raise FileNotFoundError(
+            "Legacy Python betaMax entrypoint not found: "
+            f"{entrypoint}. This repository snapshot is intended to run with "
+            "--betamax-engine cpp. If you have the legacy Python backend in a "
+            "different checkout, set BM_BETAMAX_PY_ENTRYPOINT to that file."
+        )
     cmd = [
         "python3",
-        "betamax/app/betamax.py",
+        entrypoint,
         "--positives",
         positives,
         "--negatives",
@@ -113,7 +125,14 @@ def build_cmd_cpp(
     oracle_cmd: Optional[str],
     cache_path: Optional[str],
 ) -> list[str]:
-    exe = os.environ.get("BM_BETAMAX_CPP_BIN", "betamax_cpp/build/betamax_cpp")
+    exe = cpp_bin_path()
+    if not os.path.exists(exe):
+        raise FileNotFoundError(
+            "betaMax C++ binary not found: "
+            f"{exe}. Build it with "
+            "'cmake -S betamax_cpp -B betamax_cpp/build -DCMAKE_BUILD_TYPE=Release' "
+            "and 'cmake --build betamax_cpp/build -j', or run ./run_bms.sh."
+        )
     # Default to unbounded cost search; set BM_CPP_MAX_COST to a non-negative integer to cap.
     max_cost = int(os.environ.get("BM_CPP_MAX_COST", "-1"))
     max_candidates = int(os.environ.get("BM_CPP_MAX_CANDIDATES", "50"))

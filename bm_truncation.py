@@ -15,7 +15,12 @@ from pathlib import Path
 from typing import Optional
 
 from bm_betamax_backend import build_betamax_cmd, cpp_bin_path, get_engine, should_precompute_cache
-from bm_ddmax_backend import ddmax_repair_by_deletion, oracle_cmd_from_env_or_default, select_regex_oracle_cmd
+from bm_ddmax_backend import (
+    ddmax_repair_by_deletion,
+    oracle_cmd_from_env_or_default,
+    select_regex_oracle_arg,
+    select_regex_oracle_cmd,
+)
 from bm_lstar_mutations import LStarMutationPool, get_mutation_table_name
 
 # ------------------------------------------------------------------------------
@@ -832,7 +837,7 @@ def repair_and_update_entry(cursor: sqlite3.Cursor, conn: sqlite3.Connection, ro
                 elif os.path.exists(oracle_wrapper):
                     oracle_cmd = oracle_wrapper
                 else:
-                    oracle_cmd = None
+                    oracle_cmd = select_regex_oracle_arg(base_format, category)
             else:
                 oracle_cmd = PROJECT_PATHS.get(base_format)
 
@@ -1305,7 +1310,7 @@ def main() -> None:
                             elif os.path.exists(oracle_wrapper):
                                 oracle_cmd = oracle_wrapper
                             else:
-                                oracle_cmd = None
+                                oracle_cmd = select_regex_oracle_arg(fmt, category)
                         else:
                             oracle_cmd = PROJECT_PATHS.get(fmt)
 
