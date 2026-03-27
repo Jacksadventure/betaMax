@@ -92,6 +92,14 @@ cache/
 cache*/
 project/repair_results/
 
+# Native validator binaries generated locally by validators/build_validators.sh
+/validators/match_re2
+/validators/re2_server
+/validators/validate_*
+!/validators/validate_*.cpp
+!/validators/validate_iso8601_mixed
+/validators/*.dSYM/
+
 # Backup & misc
 *.orig
 *.rej

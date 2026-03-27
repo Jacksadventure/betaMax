@@ -111,6 +111,13 @@ selected_formats_from_args() {
   printf '%s\n' "${values[@]}"
 }
 
+build_all_native_regex_validators() {
+  [[ -x "./validators/build_validators.sh" ]] || die "Missing ./validators/build_validators.sh."
+  echo "[INFO] Building all native regex validators..."
+  print_cmd ./validators/build_validators.sh
+  ./validators/build_validators.sh
+}
+
 ensure_native_regex_validators() {
   local -a requested=("$@")
   local -a needed=()
@@ -131,9 +138,7 @@ ensure_native_regex_validators() {
     validator="validators/validate_${fmt}"
     if [[ ! -x "$validator" ]]; then
       echo "[INFO] Native RE2 validator '$validator' not found. Building validators..."
-      [[ -x "./validators/build_validators.sh" ]] || die "Missing ./validators/build_validators.sh."
-      print_cmd ./validators/build_validators.sh
-      ./validators/build_validators.sh
+      build_all_native_regex_validators
       break
     fi
   done
@@ -306,6 +311,7 @@ run_quick() {
   while IFS= read -r fmt; do
     selected_formats+=("$fmt")
   done < <(selected_formats_from_args "${quick_formats[@]}")
+  build_all_native_regex_validators
   ensure_native_regex_validators "${selected_formats[@]+"${selected_formats[@]}"}"
   ensure_betamax_backend
   if ! has_extra_flag "--formats"; then
