@@ -52,6 +52,17 @@ require_python_module() {
   fi
 }
 
+is_regex_format() {
+  case "$1" in
+    date|time|isbn|ipv4|ipv6|url|iso8601|pathfile)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 default_db_path() {
   local stem="$1"
   if [[ -n "${DB_PREFIX:-}" ]]; then
@@ -73,6 +84,63 @@ resolve_formats() {
     values=("${DEFAULT_REGEX_FORMATS[@]}")
   fi
   printf '%s\n' "${values[@]}"
+}
+
+selected_formats_for_mode() {
+  local mode="$1"
+  local -a values=()
+  local capture=0
+  local arg
+
+  for arg in "${EXTRA_ARGS[@]}"; do
+    if [[ "$capture" == "1" ]]; then
+      if [[ "$arg" == --* ]]; then
+        break
+      fi
+      values+=("$arg")
+    elif [[ "$arg" == "--formats" ]]; then
+      capture=1
+    fi
+  done
+
+  if (( ${#values[@]} == 0 )); then
+    resolve_formats "$mode"
+    return 0
+  fi
+  printf '%s\n' "${values[@]}"
+}
+
+ensure_native_regex_validators() {
+  local -a requested=("$@")
+  local -a needed=()
+  local fmt
+  local validator
+
+  for fmt in "${requested[@]}"; do
+    if is_regex_format "$fmt"; then
+      needed+=("$fmt")
+    fi
+  done
+
+  if (( ${#needed[@]} == 0 )); then
+    return 0
+  fi
+
+  for fmt in "${needed[@]}"; do
+    validator="validators/validate_${fmt}"
+    if [[ ! -x "$validator" ]]; then
+      echo "[INFO] Native RE2 validator '$validator' not found. Building validators..."
+      [[ -x "./validators/build_validators.sh" ]] || die "Missing ./validators/build_validators.sh."
+      print_cmd ./validators/build_validators.sh
+      ./validators/build_validators.sh
+      break
+    fi
+  done
+
+  for fmt in "${needed[@]}"; do
+    validator="validators/validate_${fmt}"
+    [[ -x "$validator" ]] || die "Missing native regex validator '$validator'. Install RE2 and run './validators/build_validators.sh'."
+  done
 }
 
 ensure_mutation_dbs() {
@@ -115,7 +183,7 @@ run_suite() {
   local -a formats=()
   while IFS= read -r fmt; do
     formats+=("$fmt")
-  done < <(resolve_formats "$mode")
+  done < <(selected_formats_for_mode "$mode")
 
   if [[ "${#formats[@]}" -eq 0 ]]; then
     die "No formats selected for mode '$mode'."
@@ -130,6 +198,7 @@ run_suite() {
   if [[ "$mode" == "subjects" ]]; then
     ensure_subject_prereqs
   else
+    ensure_native_regex_validators "${formats[@]}"
     require_python_module regex
   fi
 
@@ -190,6 +259,7 @@ Useful env vars:
 
 Notes:
   - Extra args are forwarded to bm_single.py, bm_multiple.py, and bm_triple.py.
+  - Regex mode requires native RE2 validators under validators/validate_*; the launcher builds them automatically if needed.
   - For subject mode you need project/bin/erepair.jar and the corresponding subject mutation DBs.
 EOF
 }

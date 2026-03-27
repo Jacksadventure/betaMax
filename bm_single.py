@@ -11,10 +11,11 @@ import argparse
 from typing import Optional
 
 from bm_lstar_mutations import LStarMutationPool, get_mutation_table_name
-from bm_betamax_backend import build_betamax_cmd, cpp_bin_path, get_engine, should_precompute_cache
+from bm_betamax_backend import build_betamax_cmd, cpp_bin_path
 from bm_ddmax_backend import (
     ddmax_repair_by_deletion,
     oracle_cmd_from_env_or_default,
+    require_native_regex_validator,
     select_regex_oracle_arg,
     select_regex_oracle_cmd,
 )
@@ -40,7 +41,7 @@ PROJECT_PATHS = {
     "lisp": "project/bin/subjects/sexp-parser/sexp",
     "obj": "project/bin/subjects/obj/build/obj_parser",
     "c": "project/bin/subjects/tiny/tiny",
-    # Regex-based categories use match.py as oracle command string
+    # Regex category command strings used by helper paths.
     "date": "python3 match.py Date",
     "iso8601": "python3 match.py ISO8601",
     "time": "python3 match.py Time",
@@ -130,18 +131,13 @@ os.makedirs(CACHE_ROOT, exist_ok=True)
 # "broken DB strings" are often not reliable negatives for learning.
 BM_NEGATIVES_FROM_DB = os.environ.get("BM_NEGATIVES_FROM_DB", "0").lower() in ("1", "true", "yes")
 
-# betaMax engine selection (cpp by default; python for betamax/app/betamax.py)
-BETAMAX_ENGINE = get_engine(default="cpp")
-
-
 def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
     """
     Build the cache path for a given format/learner combo so grammars learned
     with different algorithms do not overwrite each other.
     """
     learner_name = (learner or _runtime_betamax_learner()).replace("-", "_")
-    ext = "json" if BETAMAX_ENGINE == "python" else "dfa"
-    return os.path.join(CACHE_ROOT, f"lstar_{fmt}_{learner_name}.{ext}")
+    return os.path.join(CACHE_ROOT, f"lstar_{fmt}_{learner_name}.dfa")
 
 
 def _runtime_betamax_learner() -> str:
@@ -355,44 +351,6 @@ def _update_results_row(
 
 
 _RE_METRIC = re.compile(r"^\[METRICS\]\s+([a-zA-Z0-9_]+)=([0-9]*\.?[0-9]+)\s*$", re.MULTILINE)
-_RE_PROFILE_EC = re.compile(r"^\[PROFILE\]\s+ec_earley(?:\(relearn\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
-_RE_PROFILE_LEARN_TOTAL = re.compile(r"^\[PROFILE\]\s+learn_grammar\(total\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
-_RE_PROFILE_LEARN_RELEARN = re.compile(r"^\[PROFILE\]\s+learn_grammar\(relearn\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
-_RE_PROFILE_ORACLE = re.compile(r"^\[PROFILE\]\s+oracle_validate(?:\([^\)]*\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
-
-
-def _extract_betamax_metrics(stdout: str) -> tuple[float, float, float]:
-    kv: dict[str, float] = {}
-    for m in _RE_METRIC.finditer(stdout or ""):
-        try:
-            kv[m.group(1)] = float(m.group(2))
-        except Exception:
-            continue
-    if "ec_seconds_total" in kv or "learn_seconds_total" in kv or "oracle_seconds_total" in kv:
-        return (
-            float(kv.get("ec_seconds_total", 0.0)),
-            float(kv.get("learn_seconds_total", 0.0)),
-            float(kv.get("oracle_seconds_total", 0.0)),
-        )
-    ec_time = sum(float(m.group(1)) for m in _RE_PROFILE_EC.finditer(stdout or "") if m.group(1))
-    learn_time = 0.0
-    for m in _RE_PROFILE_LEARN_TOTAL.finditer(stdout or ""):
-        try:
-            learn_time += float(m.group(1))
-        except Exception:
-            pass
-    for m in _RE_PROFILE_LEARN_RELEARN.finditer(stdout or ""):
-        try:
-            learn_time += float(m.group(1))
-        except Exception:
-            pass
-    oracle_time = 0.0
-    for m in _RE_PROFILE_ORACLE.finditer(stdout or ""):
-        try:
-            oracle_time += float(m.group(1))
-        except Exception:
-            pass
-    return ec_time, learn_time, oracle_time
 
 
 def _ensure_text(val) -> str:
@@ -458,11 +416,9 @@ def insert_test_samples_to_db(db_path: str, format_key: str, test_samples: list)
 
 def validate_with_external_tool(file_path: str, format_key: str, algorithm: str) -> bool:
     """
-    Validate a repaired file using validators/regex validate_* if available,
-    otherwise validators/validate_* (earley), or fallback to Python validators.
+    Validate a repaired file.
     - erepair: use match_partial.py Category
-    - betamax: prefer validators/validate_* (binary); fallback to validators/regex or match.py
-    - earley: prefer validators/validate_* (binary); fallback to validators/regex or match.py
+    - regex benchmarks otherwise require validators/validate_* (native RE2 binary)
     """
     base_format = format_key.split('_')[-1]
     try:
@@ -470,26 +426,8 @@ def validate_with_external_tool(file_path: str, format_key: str, algorithm: str)
             category = REGEX_DIR_TO_CATEGORY.get(base_format, base_format)
             if algorithm == "erepair":
                 cmd = ["python3", "match_partial.py", category, file_path]
-            elif algorithm == "betamax":
-                validator_bin = os.path.join("validators", f"validate_{base_format}")
-                wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-                if os.path.exists(validator_bin):
-                    cmd = [validator_bin, file_path]
-                elif os.path.exists(wrapper):
-                    cmd = [wrapper, file_path]
-                else:
-                    cmd = ["python3", "match.py", category, file_path]
             else:
-                # earley or others: prefer binary validator, then regex wrapper, then match.py
-                validator_path = os.path.join("validators", f"validate_{base_format}")
-                if os.path.exists(validator_path):
-                    cmd = [validator_path, file_path]
-                else:
-                    wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-                    if os.path.exists(wrapper):
-                        cmd = [wrapper, file_path]
-                    else:
-                        cmd = ["python3", "match.py", category, file_path]
+                cmd = [require_native_regex_validator(base_format), file_path]
         else:
             # Fallback for non-regex formats (not used in current VALID_FORMATS)
             proj = PROJECT_PATHS.get(base_format)
@@ -576,30 +514,6 @@ def extract_oracle_seconds_total(stdout: str) -> float:
         except Exception:
             continue
     return last_val
-
-
-def extract_lstar_attempts(stdout: str) -> int:
-    """
-    Extract number of LSTAR EC attempts from stdout logs.
-    Counts '[ATTEMPT N]' lines and returns N+1 (to include attempt 0).
-    Falls back to parsing 'attempt x/y' info lines.
-    """
-    max_attempt = -1
-    try:
-        for m in re.finditer(r"\[ATTEMPT\s+(\d+)\]", stdout):
-            n = int(m.group(1))
-            if n > max_attempt:
-                max_attempt = n
-        if max_attempt >= 0:
-            return max_attempt + 1
-        # Fallback: parse 'attempt x/y' lines
-        m2 = re.findall(r"attempt\s+(\d+)\s*/\s*(\d+)", stdout, flags=re.IGNORECASE)
-        if m2:
-            max_attempt = max(int(x) for x, _ in m2)
-            return max_attempt + 1  # include initial attempt 0
-    except Exception:
-        pass
-    return 0
 
 
 def repair_and_update_entry(cursor, conn, row):
@@ -778,26 +692,18 @@ def repair_and_update_entry(cursor, conn, row):
             except Exception:
                 pass
 
-        # Use our Python repairer with validators/regex oracle (handled inside repairer)
+        # Use the native RE2 validator for regex benchmarks.
         attempts = 500
-        # Prefer validators/ (binary) oracle; allow override via LSTAR_ORACLE_VALIDATOR
         oracle_override = os.environ.get("LSTAR_ORACLE_VALIDATOR")
-        oracle_bin = os.path.join("validators", f"validate_{base_format}")
-        oracle_wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
         if oracle_override:
             oracle_cmd = oracle_override
         else:
             if base_format in REGEX_FORMATS:
-                if os.path.exists(oracle_bin):
-                    oracle_cmd = oracle_bin
-                elif os.path.exists(oracle_wrapper):
-                    oracle_cmd = oracle_wrapper
-                else:
-                    oracle_cmd = select_regex_oracle_arg(base_format, category)
+                oracle_cmd = select_regex_oracle_arg(base_format, category)
             else:
                 oracle_cmd = PROJECT_PATHS.get(base_format)
         cmd = build_betamax_cmd(
-            engine=BETAMAX_ENGINE,
+            engine="cpp",
             positives=pos_file,
             negatives=neg_file,
             cache_path=cache_path,
@@ -887,16 +793,7 @@ def repair_and_update_entry(cursor, conn, row):
         # Extract oracle info (optional)
         it_o, correct_runs, incorrect_runs, incomplete_runs = extract_oracle_info(stdout)
         if algorithm == "betamax":
-            if BETAMAX_ENGINE == "python":
-                iterations = extract_lstar_attempts(stdout)
-                ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
-                if repair_time > 0:
-                    ec_ratio = ec_time / repair_time
-                    learn_ratio = learn_time / repair_time
-                    oracle_ratio = oracle_time / repair_time
-            else:
-                # C++ engine does not emit Python betaMax metrics/attempt counters.
-                iterations = it_o
+            iterations = it_o
         else:
             iterations = it_o
             if algorithm == "erepair":
@@ -943,13 +840,6 @@ def repair_and_update_entry(cursor, conn, row):
         except Exception:
             pass
         return_code = proc.returncode if (proc and proc.returncode is not None) else -9
-        if algorithm == "betamax":
-            iterations = extract_lstar_attempts(stdout)
-            ec_time, learn_time, oracle_time = _extract_betamax_metrics(stdout)
-            if repair_time > 0:
-                ec_ratio = ec_time / repair_time
-                learn_ratio = learn_time / repair_time
-                oracle_ratio = oracle_time / repair_time
     except Exception as e:
         print(f"[ERROR] Repair failed for entry ID={id_}: {e}")
     finally:
@@ -1089,12 +979,6 @@ def main():
                         help="Use deterministic mutation enumeration (default: random sampling).")
     parser.add_argument("--lstar-mutation-seed", type=int,
                         help="Optional seed applied to the random sampler (ignored for deterministic mode).")
-    parser.add_argument(
-        "--betamax-engine",
-        choices=["python", "cpp"],
-        default=None,
-        help="Select betaMax engine backend for algorithm=betamax (default: env BM_BETAMAX_ENGINE or 'cpp')",
-    )
     args = parser.parse_args()
 
     # Allow "--mutations 20" style usage by separating numeric caps from
@@ -1116,18 +1000,14 @@ def main():
     QUIET = bool(args.quiet)
     LIMIT_N = args.limit
     PAUSE_ON_EXIT = bool(args.pause_on_exit)
-    global BETAMAX_ENGINE
-    BETAMAX_ENGINE = get_engine(args.betamax_engine, default="cpp")
-    if BETAMAX_ENGINE == "cpp":
-        exe = cpp_bin_path()
-        if not os.path.exists(exe):
-            raise SystemExit(
-                f"[ERROR] C++ betaMax binary not found: {exe}\n"
-                "Build it first:\n"
-                "  cmake -S betamax_cpp -B betamax_cpp/build -DCMAKE_BUILD_TYPE=Release\n"
-                "  cmake --build betamax_cpp/build -j\n"
-                "Or run with: --betamax-engine python"
-            )
+    exe = cpp_bin_path()
+    if not os.path.exists(exe):
+        raise SystemExit(
+            f"[ERROR] C++ betaMax binary not found: {exe}\n"
+            "Build it first:\n"
+            "  cmake -S betamax_cpp -B betamax_cpp/build -DCMAKE_BUILD_TYPE=Release\n"
+            "  cmake --build betamax_cpp/build -j"
+        )
 
     db_path = args.db
 
@@ -1138,10 +1018,8 @@ def main():
     # 1) Create or reuse the database
     create_database(db_path)
 
-    # Precompute caches for the selected engine:
-    #   - python: writes JSON grammar cache via --grammar-cache --init-cache
-    #   - cpp:    writes DFA cache via --dfa-cache --init-cache
-    if "betamax" in REPAIR_ALGORITHMS and should_precompute_cache(BETAMAX_ENGINE):
+    # Precompute DFA caches for the C++ backend.
+    if "betamax" in REPAIR_ALGORITHMS:
         os.makedirs(CACHE_ROOT, exist_ok=True)
         cache_learner = _cache_betamax_learner()
         runtime_learner = _runtime_betamax_learner()
@@ -1150,12 +1028,8 @@ def main():
                 format_key = f"{mutation_type}_{fmt}"
                 # Use shared cache per format across all bm_* (single/double/triple)
                 cache_path = _cache_path(fmt, cache_learner)
-                if BETAMAX_ENGINE == "cpp":
-                    if _cpp_dfa_cache_ready(cache_path):
-                        continue
-                else:
-                    if os.path.exists(cache_path):
-                        continue
+                if _cpp_dfa_cache_ready(cache_path):
+                    continue
                 # Pick a source DB for precompute: prefer env LSTAR_CACHE_SOURCE_MUTATION, else fallback to single/double/triple
                 preferred = os.environ.get("LSTAR_CACHE_SOURCE_MUTATION", "single")
                 mutation_db_path = None
@@ -1188,79 +1062,43 @@ def main():
                                 nf.write(line + "\n")
                     connc.close()
                     category = REGEX_DIR_TO_CATEGORY.get(fmt, fmt)
-                    # Prefer validators/ (binary) oracle for precompute; allow override via LSTAR_ORACLE_VALIDATOR
                     oracle_override = os.environ.get("LSTAR_ORACLE_VALIDATOR")
-                    oracle_bin = os.path.join("validators", f"validate_{fmt}")
-                    oracle_wrapper = os.path.join("validators", "regex", f"validate_{fmt}")
                     if oracle_override:
                         oracle_cmd = oracle_override
                     else:
                         if fmt in REGEX_FORMATS:
-                            if os.path.exists(oracle_bin):
-                                oracle_cmd = oracle_bin
-                            elif os.path.exists(oracle_wrapper):
-                                oracle_cmd = oracle_wrapper
-                            else:
-                                oracle_cmd = select_regex_oracle_arg(fmt, category)
+                            oracle_cmd = select_regex_oracle_arg(fmt, category)
                         else:
                             oracle_cmd = PROJECT_PATHS.get(fmt)
                     learner_pre = cache_learner
                     pre_mut = int(os.environ.get("LSTAR_PRECOMPUTE_MUTATIONS", "60"))
 
-                    if BETAMAX_ENGINE == "python":
-                        cmd = [
-                            "python3", "betamax/app/betamax.py",
-                            "--positives", pos_file,
-                            "--negatives", neg_file,
-                            "--category", category,
-                            "--grammar-cache", cache_path,
-                            "--init-cache",
-                            "--learner", learner_pre,
-                        ]
-                        if oracle_cmd:
-                            cmd += ["--oracle-validator", oracle_cmd]
-                        # Equivalence speed knobs via env for precompute as well
-                        eq_flags = []
-                        if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
-                            eq_flags += ["--eq-max-length", os.environ["LSTAR_EQ_MAX_LENGTH"]]
-                        if os.environ.get("LSTAR_EQ_SAMPLES_PER_LENGTH"):
-                            eq_flags += ["--eq-samples-per-length", os.environ["LSTAR_EQ_SAMPLES_PER_LENGTH"]]
-                        if os.environ.get("LSTAR_EQ_DISABLE_SAMPLING", "").lower() in ("1", "true", "yes"):
-                            eq_flags += ["--eq-disable-sampling"]
-                        if os.environ.get("LSTAR_EQ_SKIP_NEGATIVES", "").lower() in ("1", "true", "yes"):
-                            eq_flags += ["--eq-skip-negatives"]
-                        if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
-                            eq_flags += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
-                        cmd += eq_flags
-                        if pre_mut > 0:
-                            cmd += ["--mutations", str(pre_mut)]
-                    else:
-                        exe = cpp_bin_path()
-                        cmd = [
-                            exe,
-                            "--positives", pos_file,
-                            "--negatives", neg_file,
-                            "--category", category,
-                            "--dfa-cache", cache_path,
-                            "--init-cache",
-                            "--learner", learner_pre,
-                            "--repo-root", ".",
-                            "--incremental",
-                        ]
-                        if oracle_cmd:
-                            cmd += ["--oracle-validator", oracle_cmd]
-                        if os.environ.get("LSTAR_EQ_DISABLE_SAMPLING", "").lower() in ("1", "true", "yes"):
-                            cmd += ["--eq-disable-sampling"]
-                        if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
-                            cmd += ["--eq-max-length", os.environ["LSTAR_EQ_MAX_LENGTH"]]
-                        if os.environ.get("LSTAR_EQ_SAMPLES_PER_LENGTH"):
-                            cmd += ["--eq-samples-per-length", os.environ["LSTAR_EQ_SAMPLES_PER_LENGTH"]]
-                        if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
-                            cmd += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
-                        if os.environ.get("LSTAR_EQ_MAX_ROUNDS"):
-                            cmd += ["--eq-max-rounds", os.environ["LSTAR_EQ_MAX_ROUNDS"]]
-                        if pre_mut > 0:
-                            cmd += ["--mutations", str(pre_mut)]
+                    exe = cpp_bin_path()
+                    cmd = [
+                        exe,
+                        "--positives", pos_file,
+                        "--negatives", neg_file,
+                        "--category", category,
+                        "--dfa-cache", cache_path,
+                        "--init-cache",
+                        "--learner", learner_pre,
+                        "--repo-root", ".",
+                        "--incremental",
+                    ]
+                    if oracle_cmd:
+                        cmd += ["--oracle-validator", oracle_cmd]
+                    if os.environ.get("LSTAR_EQ_DISABLE_SAMPLING", "").lower() in ("1", "true", "yes"):
+                        cmd += ["--eq-disable-sampling"]
+                    if os.environ.get("LSTAR_EQ_MAX_LENGTH"):
+                        cmd += ["--eq-max-length", os.environ["LSTAR_EQ_MAX_LENGTH"]]
+                    if os.environ.get("LSTAR_EQ_SAMPLES_PER_LENGTH"):
+                        cmd += ["--eq-samples-per-length", os.environ["LSTAR_EQ_SAMPLES_PER_LENGTH"]]
+                    if os.environ.get("LSTAR_EQ_MAX_ORACLE"):
+                        cmd += ["--eq-max-oracle", os.environ["LSTAR_EQ_MAX_ORACLE"]]
+                    if os.environ.get("LSTAR_EQ_MAX_ROUNDS"):
+                        cmd += ["--eq-max-rounds", os.environ["LSTAR_EQ_MAX_ROUNDS"]]
+                    if pre_mut > 0:
+                        cmd += ["--mutations", str(pre_mut)]
                     print(f"[DEBUG] Precompute cache for {format_key}: {' '.join(cmd)} (K={pre_k})")
                     pre_tmo = int(os.environ.get("LSTAR_PRECOMPUTE_TIMEOUT", "600"))
                     env = dict(os.environ)

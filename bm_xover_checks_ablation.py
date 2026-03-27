@@ -120,12 +120,6 @@ def parse_args() -> argparse.Namespace:
         help="Forward --lstar-mutation-deterministic.",
     )
     parser.add_argument("--lstar-mutation-seed", type=int, help="Forward --lstar-mutation-seed.")
-    parser.add_argument(
-        "--betamax-engine",
-        choices=["python", "cpp"],
-        default="cpp",
-        help="Forward to bm_* as --betamax-engine (default: %(default)s).",
-    )
     parser.add_argument("--skip-existing", action="store_true",
                         help="Skip a run if its DB already exists.")
     parser.add_argument("--dry-run", action="store_true",
@@ -184,8 +178,6 @@ def build_command(args: argparse.Namespace, mode: str, db_path: str) -> List[str
         cmd.append("--lstar-mutation-deterministic")
     if args.lstar_mutation_seed is not None:
         cmd += ["--lstar-mutation-seed", str(args.lstar_mutation_seed)]
-    if args.betamax_engine:
-        cmd += ["--betamax-engine", args.betamax_engine]
     if args.bm_args:
         cmd += args.bm_args
     return cmd
@@ -210,12 +202,6 @@ def main() -> int:
     cache_root = args.cache_root
     os.makedirs(cache_root, exist_ok=True)
 
-    if args.betamax_engine != "cpp":
-        print(
-            "[WARN] --betamax-engine is not cpp; "
-            "LSTAR_RPNI_XOVER_CHECKS may not affect non-cpp runs."
-        )
-
     for checks in checks_values:
         for mode in args.modes:
             db_path = _render_db_path(args.db_template, mode, checks, args.pairs)
@@ -235,7 +221,6 @@ def main() -> int:
             env["LSTAR_RPNI_XOVER_PAIRS"] = str(args.pairs)
             env["LSTAR_CACHE_LEARNER"] = "rpni_xover"
             env["LSTAR_LEARNER"] = "rpni"
-            env["BM_BETAMAX_ENGINE"] = str(args.betamax_engine)
             env["BM_ABLATION_XOVER_CHECKS"] = str(checks)
 
             cmd = build_command(args, mode, db_path)

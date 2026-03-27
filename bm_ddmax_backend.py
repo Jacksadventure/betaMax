@@ -4,31 +4,33 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
-import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+def native_regex_validator_path(base_format: str) -> str:
+    return os.path.join("validators", f"validate_{base_format}")
 
-def _python_bin_for_oracle() -> str:
-    return os.environ.get("PYTHON_BIN") or sys.executable or "python3"
+
+def require_native_regex_validator(base_format: str) -> str:
+    validator = native_regex_validator_path(base_format)
+    if os.path.isfile(validator) and os.access(validator, os.X_OK):
+        return validator
+    raise FileNotFoundError(
+        f"Missing native regex validator '{validator}'. "
+        "Install RE2 and build validators with './validators/build_validators.sh'."
+    )
 
 
 def select_regex_oracle_cmd(base_format: str, category: str) -> List[str]:
     """
-    Pick an oracle command for regex formats, consistent with bm_* validator selection:
-    - prefer native/binary validator under validators/validate_<fmt>
-    - else prefer validators/regex/validate_<fmt>
-    - else fall back to python3 match.py <Category>
+    Pick the native RE2-backed validator command for regex formats.
+    The benchmark automation relies on validators/validate_<fmt> binaries and
+    no longer falls back to the Python regex oracle.
     """
-    validator_bin = os.path.join("validators", f"validate_{base_format}")
-    wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-    if os.path.exists(validator_bin):
-        return [validator_bin]
-    if os.path.exists(wrapper):
-        return [wrapper]
-    return [_python_bin_for_oracle(), "match.py", category]
+    _ = category
+    return [require_native_regex_validator(base_format)]
 
 
 def select_regex_oracle_arg(base_format: str, category: str) -> str:

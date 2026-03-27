@@ -16,7 +16,6 @@ EXTRA_ARGS=("$@")
 export LSTAR_PRECOMPUTE_TIMEOUT="${LSTAR_PRECOMPUTE_TIMEOUT:-18000}"
 export LSTAR_CACHE_LEARNER="${LSTAR_CACHE_LEARNER:-rpni_xover}"
 export LSTAR_LEARNER="${LSTAR_LEARNER:-rpni}"
-export BM_BETAMAX_ENGINE="${BM_BETAMAX_ENGINE:-cpp}"
 export LSTAR_PARSE_TIMEOUT="${LSTAR_PARSE_TIMEOUT:-600}"
 export LSTAR_EC_TIMEOUT="${LSTAR_EC_TIMEOUT:-600}"
 export LSTAR_PRECOMPUTE_MUTATIONS="${LSTAR_PRECOMPUTE_MUTATIONS:-60}"
@@ -68,6 +67,72 @@ require_python_module() {
   fi
 }
 
+is_regex_format() {
+  case "$1" in
+    date|time|isbn|ipv4|ipv6|url|iso8601|pathfile)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+selected_formats_from_args() {
+  local -a values=()
+  local capture=0
+  local arg
+  for arg in "${EXTRA_ARGS[@]}"; do
+    if [[ "$capture" == "1" ]]; then
+      if [[ "$arg" == --* ]]; then
+        break
+      fi
+      values+=("$arg")
+    elif [[ "$arg" == "--formats" ]]; then
+      capture=1
+    fi
+  done
+
+  if (( ${#values[@]} == 0 )); then
+    printf '%s\n' "$@"
+    return 0
+  fi
+  printf '%s\n' "${values[@]}"
+}
+
+ensure_native_regex_validators() {
+  local -a requested=("$@")
+  local -a needed=()
+  local fmt
+  local validator
+
+  for fmt in "${requested[@]}"; do
+    if is_regex_format "$fmt"; then
+      needed+=("$fmt")
+    fi
+  done
+
+  if (( ${#needed[@]} == 0 )); then
+    return 0
+  fi
+
+  for fmt in "${needed[@]}"; do
+    validator="validators/validate_${fmt}"
+    if [[ ! -x "$validator" ]]; then
+      echo "[INFO] Native RE2 validator '$validator' not found. Building validators..."
+      [[ -x "./validators/build_validators.sh" ]] || die "Missing ./validators/build_validators.sh."
+      print_cmd ./validators/build_validators.sh
+      ./validators/build_validators.sh
+      break
+    fi
+  done
+
+  for fmt in "${needed[@]}"; do
+    validator="validators/validate_${fmt}"
+    [[ -x "$validator" ]] || die "Missing native regex validator '$validator'. Install RE2 and run './validators/build_validators.sh'."
+  done
+}
+
 default_db_path() {
   local stem="$1"
   if [[ -n "${DB_PREFIX:-}" ]]; then
@@ -78,9 +143,6 @@ default_db_path() {
 }
 
 ensure_cpp_engine() {
-  if [[ "$BM_BETAMAX_ENGINE" != "cpp" ]]; then
-    return 0
-  fi
   if [[ -x "betamax_cpp/build/betamax_cpp" ]]; then
     return 0
   fi
@@ -92,23 +154,9 @@ ensure_cpp_engine() {
   cmake --build betamax_cpp/build -j
 }
 
-ensure_python_backend() {
-  if [[ "$BM_BETAMAX_ENGINE" != "python" ]]; then
-    return 0
-  fi
-  local entrypoint="${BM_BETAMAX_PY_ENTRYPOINT:-betamax/app/betamax.py}"
-  if [[ ! -f "$entrypoint" ]]; then
-    die "Legacy Python betaMax backend not found at '$entrypoint'. Use 'BM_BETAMAX_ENGINE=cpp' or point BM_BETAMAX_PY_ENTRYPOINT to the legacy checkout."
-  fi
-}
-
 ensure_betamax_backend() {
   require_python_module regex regex
-  case "$BM_BETAMAX_ENGINE" in
-    cpp) ensure_cpp_engine ;;
-    python) ensure_python_backend ;;
-    *) die "Unsupported BM_BETAMAX_ENGINE='$BM_BETAMAX_ENGINE'. Expected 'cpp' or 'python'." ;;
-  esac
+  ensure_cpp_engine
 }
 
 ensure_mutation_dbs() {
@@ -145,6 +193,11 @@ ensure_truncation_subjects() {
 }
 
 run_single() {
+  local -a selected_formats=()
+  while IFS= read -r fmt; do
+    selected_formats+=("$fmt")
+  done < <(selected_formats_from_args "${DEFAULT_REGEX_FORMATS[@]}")
+  ensure_native_regex_validators "${selected_formats[@]}"
   ensure_betamax_backend
   if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
     ensure_mutation_dbs single "${DEFAULT_REGEX_FORMATS[@]}"
@@ -164,15 +217,17 @@ run_single() {
   if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  if ! has_flag "--betamax-engine" "${EXTRA_ARGS[@]}"; then
-    cmd+=(--betamax-engine "$BM_BETAMAX_ENGINE")
-  fi
   cmd+=("${EXTRA_ARGS[@]}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
 }
 
 run_double() {
+  local -a selected_formats=()
+  while IFS= read -r fmt; do
+    selected_formats+=("$fmt")
+  done < <(selected_formats_from_args "${DEFAULT_REGEX_FORMATS[@]}")
+  ensure_native_regex_validators "${selected_formats[@]}"
   ensure_betamax_backend
   if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
     ensure_mutation_dbs double "${DEFAULT_REGEX_FORMATS[@]}"
@@ -192,15 +247,17 @@ run_double() {
   if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  if ! has_flag "--betamax-engine" "${EXTRA_ARGS[@]}"; then
-    cmd+=(--betamax-engine "$BM_BETAMAX_ENGINE")
-  fi
   cmd+=("${EXTRA_ARGS[@]}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
 }
 
 run_triple() {
+  local -a selected_formats=()
+  while IFS= read -r fmt; do
+    selected_formats+=("$fmt")
+  done < <(selected_formats_from_args "${DEFAULT_REGEX_FORMATS[@]}")
+  ensure_native_regex_validators "${selected_formats[@]}"
   ensure_betamax_backend
   if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
     ensure_mutation_dbs triple "${DEFAULT_REGEX_FORMATS[@]}"
@@ -220,24 +277,26 @@ run_triple() {
   if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  if ! has_flag "--betamax-engine" "${EXTRA_ARGS[@]}"; then
-    cmd+=(--betamax-engine "$BM_BETAMAX_ENGINE")
-  fi
   cmd+=("${EXTRA_ARGS[@]}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
 }
 
 run_quick() {
-  ensure_betamax_backend
   local quick_limit="${BM_QUICK_LIMIT:-3}"
   local quick_precompute="${BM_QUICK_PRECOMPUTE_MUTATIONS:-10}"
   local quick_formats_raw="${BM_QUICK_FORMATS:-date}"
   local -a quick_formats=()
+  local -a selected_formats=()
   read -r -a quick_formats <<< "$quick_formats_raw"
   if [[ "${#quick_formats[@]}" -eq 0 ]]; then
     quick_formats=(date)
   fi
+  while IFS= read -r fmt; do
+    selected_formats+=("$fmt")
+  done < <(selected_formats_from_args "${quick_formats[@]}")
+  ensure_native_regex_validators "${selected_formats[@]}"
+  ensure_betamax_backend
   if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
     ensure_mutation_dbs single "${quick_formats[@]}"
   fi
@@ -258,9 +317,6 @@ run_quick() {
   fi
   if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
     cmd+=(--max-workers "$MAX_WORKERS")
-  fi
-  if ! has_flag "--betamax-engine" "${EXTRA_ARGS[@]}"; then
-    cmd+=(--betamax-engine "$BM_BETAMAX_ENGINE")
   fi
   cmd+=("${EXTRA_ARGS[@]}")
   printf '[RUN] %s=%q %s=%q' \
@@ -303,9 +359,6 @@ run_truncation() {
   if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  if ! has_flag "--betamax-engine" "${EXTRA_ARGS[@]}"; then
-    cmd+=(--betamax-engine "$BM_BETAMAX_ENGINE")
-  fi
   cmd+=("${EXTRA_ARGS[@]}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
@@ -335,8 +388,6 @@ Examples:
 Useful env vars:
   PYTHON_BIN                   Python interpreter to use (default: python3)
   MAX_WORKERS                  Passed to bm_*.py if --max-workers is omitted
-  BM_BETAMAX_ENGINE            cpp (default) or python
-  BM_BETAMAX_PY_ENTRYPOINT     Legacy Python backend entrypoint when BM_BETAMAX_ENGINE=python
   BM_QUICK_FORMATS             Formats used by quick mode (default: "date")
   BM_QUICK_LIMIT               Sample limit for quick mode (default: 3)
   BM_QUICK_PRECOMPUTE_MUTATIONS Precompute mutation count for quick mode (default: 10)
@@ -345,6 +396,7 @@ Useful env vars:
 Notes:
   - Extra args are forwarded to the underlying bm_*.py runner(s).
   - For mode 'regex', use DB_PREFIX instead of --db because three scripts are run.
+  - Regex benchmark modes require native RE2 validators under validators/validate_*; the launcher builds them automatically if needed.
   - The supported quickstart path in this checkout uses the C++ backend under betamax_cpp/.
 EOF
 }

@@ -10,7 +10,7 @@ CORPUS_DIR="original_files/json_small_data"
 # Build JSON validator (oracle)
 make -C project/bin/subjects/cjson
 
-# Optional: build native betaMax engine (used when BM_BETAMAX_ENGINE=cpp)
+# Optional: build the native C++ betaMax engine
 cmake -S betamax_cpp -B betamax_cpp/build -DCMAKE_BUILD_TYPE=Release
 cmake --build betamax_cpp/build -j
 

@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VALIDATORS_DIR="$ROOT_DIR/validators"
 
+die() {
+  echo "[ERROR] $*" >&2
+  exit 1
+}
+
 : "${CXX:=}"
 if [[ -z "$CXX" ]]; then
   if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun >/dev/null 2>&1; then
@@ -19,6 +24,18 @@ RE2_LIBDIRS=()
 RE2_LIBS=(-lre2)
 RE2_OTHER=()
 
+find_re2_prefix() {
+  local prefix
+  for prefix in "${RE2_PREFIX:-}" /opt/homebrew/opt/re2 /usr/local/opt/re2 /usr/local /usr; do
+    [[ -n "$prefix" ]] || continue
+    if [[ -f "$prefix/include/re2/re2.h" ]] && compgen -G "$prefix/lib/libre2*" >/dev/null; then
+      printf '%s\n' "$prefix"
+      return 0
+    fi
+  done
+  return 1
+}
+
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists re2; then
   # Use pkg-config for include/lib dirs (but keep libs minimal: just -lre2).
   # Homebrew's libre2 dylib already depends on abseil dylibs, so linking to -lre2 is enough.
@@ -26,8 +43,15 @@ if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists re2; then
   read -r -a RE2_LIBDIRS <<<"$(pkg-config --libs-only-L re2)"
   read -r -a RE2_OTHER <<<"$(pkg-config --libs-only-other re2)"
 else
-  RE2_CFLAGS=(-I/opt/homebrew/opt/re2/include -I/opt/homebrew/opt/abseil/include)
-  RE2_LIBDIRS=(-L/opt/homebrew/opt/re2/lib)
+  RE2_PREFIX_FOUND="$(find_re2_prefix || true)"
+  if [[ -z "$RE2_PREFIX_FOUND" ]]; then
+    die "RE2 is required to build the regex validators. Install RE2 first (for example: 'brew install re2 pkg-config')."
+  fi
+  RE2_CFLAGS=(-I"$RE2_PREFIX_FOUND/include")
+  if [[ -d "${RE2_PREFIX_FOUND%/re2}/abseil/include" ]]; then
+    RE2_CFLAGS+=(-I"${RE2_PREFIX_FOUND%/re2}/abseil/include")
+  fi
+  RE2_LIBDIRS=(-L"$RE2_PREFIX_FOUND/lib")
 fi
 
 echo "[INFO] Building validators with:"

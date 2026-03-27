@@ -26,7 +26,8 @@ from pathlib import Path
 from typing import Any, Optional
 
 from bm_lstar_mutations import get_mutation_table_name
-from bm_betamax_backend import build_betamax_cmd, get_engine
+from bm_betamax_backend import build_betamax_cmd, cpp_bin_path
+from bm_ddmax_backend import require_native_regex_validator
 
 # ------------------------------------------------------------------------------
 # Defaults
@@ -42,8 +43,6 @@ REGEX_DIR_TO_CATEGORY = {
     "ipv4": "IPv4",
     "ipv6": "IPv6",
 }
-
-BETAMAX_ENGINE = get_engine()
 
 
 def create_database(db_path: str) -> None:
@@ -130,12 +129,7 @@ def insert_test_samples_to_db(db_path: str, format_key: str, test_samples: list[
 
 
 def validate_with_external_tool(file_path: str, base_format: str) -> bool:
-    category = REGEX_DIR_TO_CATEGORY.get(base_format, base_format)
-    wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
-    if os.path.exists(wrapper):
-        cmd = [wrapper, file_path]
-    else:
-        cmd = ["python3", "match.py", category, file_path]
+    cmd = [require_native_regex_validator(base_format), file_path]
     try:
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=60)
         return result.returncode == 0
@@ -162,12 +156,12 @@ def extract_lstar_attempts(stdout: str) -> int:
 
 
 _RE_METRICS_EC_TOTAL = re.compile(r"^\[METRICS\]\s+ec_seconds_total=([0-9]*\.?[0-9]+)\s*$", re.MULTILINE)
-_RE_PROFILE_EC = re.compile(r"^\[PROFILE\]\s+ec_earley(?:\\(relearn\\))?:\\s+([0-9]*\\.?[0-9]+)s\\s*$", re.MULTILINE)
+_RE_PROFILE_EC = re.compile(r"^\[PROFILE\]\s+ec_earley(?:\(relearn\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
 _RE_METRICS_LEARN_TOTAL = re.compile(r"^\[METRICS\]\s+learn_seconds_total=([0-9]*\.?[0-9]+)\s*$", re.MULTILINE)
-_RE_PROFILE_LEARN_TOTAL = re.compile(r"^\[PROFILE\]\s+learn_grammar\\(total\\):\\s+([0-9]*\\.?[0-9]+)s\\s*;", re.MULTILINE)
-_RE_PROFILE_LEARN_RELEARN = re.compile(r"^\[PROFILE\]\s+learn_grammar\\(relearn\\):\\s+([0-9]*\\.?[0-9]+)s\\s*;", re.MULTILINE)
+_RE_PROFILE_LEARN_TOTAL = re.compile(r"^\[PROFILE\]\s+learn_grammar\(total\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
+_RE_PROFILE_LEARN_RELEARN = re.compile(r"^\[PROFILE\]\s+learn_grammar\(relearn\):\s+([0-9]*\.?[0-9]+)s\s*;", re.MULTILINE)
 _RE_METRICS_ORACLE_TOTAL = re.compile(r"^\[METRICS\]\s+oracle_seconds_total=([0-9]*\.?[0-9]+)\s*$", re.MULTILINE)
-_RE_PROFILE_ORACLE = re.compile(r"^\[PROFILE\]\s+oracle_validate(?:\\([^\\)]*\\))?:\\s+([0-9]*\\.?[0-9]+)s\\s*$", re.MULTILINE)
+_RE_PROFILE_ORACLE = re.compile(r"^\[PROFILE\]\s+oracle_validate(?:\([^\)]*\))?:\s+([0-9]*\.?[0-9]+)s\s*$", re.MULTILINE)
 
 
 def extract_ec_seconds(stdout: str) -> float:
@@ -233,8 +227,7 @@ def _ensure_text(data: object) -> str:
 
 def _cache_path(fmt: str, learner: str, cache_root: str) -> str:
     learner_name = (learner or "rpni").replace("-", "_")
-    print("cache_root: ", os.path.join(cache_root, f"lstar_{fmt}_{learner_name}.json"))
-    return os.path.join(cache_root, f"lstar_{fmt}_{learner_name}.json")
+    return os.path.join(cache_root, f"lstar_{fmt}_{learner_name}.dfa")
 
 
 def run_one_betamax(
@@ -307,21 +300,18 @@ def run_one_betamax(
 
     oracle_override = os.environ.get("LSTAR_ORACLE_VALIDATOR")
     oracle_bin = os.path.join("validators", f"validate_{base_format}")
-    oracle_wrapper = os.path.join("validators", "regex", f"validate_{base_format}")
     if oracle_override:
         oracle_cmd = oracle_override
     elif os.path.exists(oracle_bin):
         oracle_cmd = oracle_bin
-    elif os.path.exists(oracle_wrapper):
-        oracle_cmd = oracle_wrapper
     else:
-        oracle_cmd = None
+        oracle_cmd = require_native_regex_validator(base_format)
 
     cmd = build_betamax_cmd(
-        engine=BETAMAX_ENGINE,
+        engine="cpp",
         positives=pos_file,
         negatives=neg_file,
-        cache_path=(cache_path if BETAMAX_ENGINE == "python" else None),
+        cache_path=cache_path,
         category=category,
         broken_file=input_file,
         output_file=output_file,
@@ -332,9 +322,8 @@ def run_one_betamax(
     )
 
     env = dict(os.environ)
-    if BETAMAX_ENGINE == "python":
-        env["BETAMAX_EMIT_METRICS"] = "1"
-        env.setdefault("LSTAR_PARSE_TIMEOUT", os.environ.get("LSTAR_PARSE_TIMEOUT", "100.0"))
+    env["BETAMAX_EMIT_METRICS"] = "1"
+    env.setdefault("LSTAR_PARSE_TIMEOUT", os.environ.get("LSTAR_PARSE_TIMEOUT", "100.0"))
 
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     t0 = time.time()
@@ -359,22 +348,13 @@ def run_one_betamax(
         elapsed = float(timeout_s)
 
     rc = proc.returncode
-    if BETAMAX_ENGINE == "python":
-        attempts = extract_lstar_attempts(stdout)
-        ec_time = extract_ec_seconds(stdout)
-        ec_ratio = (ec_time / elapsed) if elapsed > 0 else 0.0
-        learn_time = extract_learn_seconds(stdout)
-        learn_ratio = (learn_time / elapsed) if elapsed > 0 else 0.0
-        oracle_time = extract_oracle_seconds(stdout)
-        oracle_ratio = (oracle_time / elapsed) if elapsed > 0 else 0.0
-    else:
-        attempts = 0
-        ec_time = 0.0
-        ec_ratio = 0.0
-        learn_time = 0.0
-        learn_ratio = 0.0
-        oracle_time = 0.0
-        oracle_ratio = 0.0
+    attempts = extract_lstar_attempts(stdout)
+    ec_time = extract_ec_seconds(stdout)
+    learn_time = extract_learn_seconds(stdout)
+    oracle_time = extract_oracle_seconds(stdout)
+    ec_ratio = (ec_time / elapsed) if elapsed > 0 else 0.0
+    learn_ratio = (learn_time / elapsed) if elapsed > 0 else 0.0
+    oracle_ratio = (oracle_time / elapsed) if elapsed > 0 else 0.0
 
     repaired_text = ""
     fixed = 0
@@ -428,16 +408,16 @@ def main() -> None:
     ap.add_argument("--resume-only", action="store_true", help="Skip sample insertion; only run unfinished rows")
     ap.add_argument("--learner", default=os.environ.get("BM_BETAMAX_LEARNER", os.environ.get("LSTAR_LEARNER", "rpni")))
     ap.add_argument("--cache-root", default=os.environ.get("LSTAR_CACHE_ROOT", "cache"))
-    ap.add_argument(
-        "--betamax-engine",
-        choices=["python", "cpp"],
-        default=None,
-        help="Select betaMax engine backend (default: env BM_BETAMAX_ENGINE or 'python')",
-    )
     args = ap.parse_args()
 
-    global BETAMAX_ENGINE
-    BETAMAX_ENGINE = get_engine(args.betamax_engine)
+    exe = cpp_bin_path()
+    if not os.path.exists(exe):
+        raise SystemExit(
+            f"[ERROR] C++ betaMax binary not found: {exe}\n"
+            "Build it first:\n"
+            "  cmake -S betamax_cpp -B betamax_cpp/build -DCMAKE_BUILD_TYPE=Release\n"
+            "  cmake --build betamax_cpp/build -j"
+        )
 
     create_database(args.db)
 

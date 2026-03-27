@@ -80,6 +80,8 @@ project/build/
 *.swp
 *.swo
 *.txt
+# Keep CMake project manifests tracked even though they end with .txt.
+!**/CMakeLists.txt
 # SQLite databases and related generated data
 *.db
 

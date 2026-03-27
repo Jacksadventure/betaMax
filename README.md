@@ -10,7 +10,7 @@ The easiest path after cloning is:
 
 1. Install the small Python runtime from [requirements.txt](./requirements.txt).
 2. Run [run_bms.sh](./run_bms.sh).
-3. Let the script build `betamax_cpp/build/betamax_cpp` automatically if it is missing.
+3. Let the script build `betamax_cpp/build/betamax_cpp` and `validators/validate_*` automatically if they are missing.
 
 What works cleanly in this checkout:
 
@@ -20,13 +20,35 @@ This README focuses on the regex benchmark workflow.
 
 Important:
 
-- The benchmark scripts still expose `--betamax-engine python` for legacy compatibility.
-- The legacy Python backend entrypoint `betamax/app/betamax.py` is **not bundled** in this checkout.
-- Use `cpp` unless you have a separate legacy checkout and set `BM_BETAMAX_PY_ENTRYPOINT`.
+- This checkout supports the bundled C++ betaMax backend only.
+
+## Dependencies
+
+For the main regex benchmark workflow (`run_bms.sh quick|single|double|triple|regex`), the required system dependencies are:
+
+- Python 3.10+
+- `pip` and `venv` for the recommended isolated environment setup
+- CMake 3.16+ to build the bundled C++ backend in [betamax_cpp](./betamax_cpp)
+- A C++17 compiler such as `clang++` or `g++`
+- RE2 headers and libraries, because the benchmark automation uses native RE2-backed validators under [validators](./validators)
+- The pre-generated mutation databases under [mutated_files](./mutated_files), which the benchmark runners expect to exist
+
+The Python packages in [requirements.txt](./requirements.txt) are split by purpose:
+
+- `regex`: required by the Python regex helper oracles in [match.py](./match.py) and [match_partial.py](./match_partial.py)
+- `matplotlib`: only needed for reporting via [report.py](./report.py)
+- `requests`: only needed for corpus/data download via [data_fetch.py](./data_fetch.py)
+
+Optional or workflow-specific dependencies:
+
+- `make`: only needed if you want the shortcuts in [Makefile](./Makefile)
+- `pkg-config`: optional, but helps [validators/build_validators.sh](./validators/build_validators.sh) locate RE2 cleanly
+
+The standard regex quickstart in this checkout does **not** require Java, Gradle, or the optional subject-build toolchain, but it **does** require RE2 because betaMax benchmarks use the native RE2 validators.
 
 ## Quick Start
 
-Clone the repository, create a virtual environment, and install the runtime:
+After the dependencies above are available, clone the repository, create a virtual environment, and install the Python runtime:
 
 ```bash
 git clone <repo-url> betaMax
@@ -48,6 +70,7 @@ Run a small smoke benchmark:
 This default smoke run:
 
 - builds `betamax_cpp/build/betamax_cpp` automatically if needed
+- builds `validators/validate_*` automatically if needed
 - runs a small single-mutation benchmark
 - writes results to `smoke_single.db`
 
@@ -129,17 +152,17 @@ DB_PREFIX=trial3 make regex
 MAX_WORKERS=4 make quick
 ```
 
-## Optional Native Validators
+## Regex Validators
 
-For regex benchmarks, native validators under [validators](./validators) are optional.
+For regex benchmarks, native validators under [validators](./validators) are required. The benchmark automation passes `validators/validate_*` into betaMax as the oracle, so RE2 must be installed.
 
-If you want them:
+Build them manually if you want to prepare the environment ahead of time:
 
 ```bash
 ./validators/build_validators.sh
 ```
 
-Without these binaries, the benchmark scripts fall back to the Python regex oracle in [match.py](./match.py).
+If they are missing, [run_bms.sh](./run_bms.sh) and [run_ddmax.sh](./run_ddmax.sh) try to build them automatically before starting the regex benchmarks.
 
 ## Outputs
 
@@ -180,7 +203,7 @@ Key files and directories:
 - [bm_multiple.py](./bm_multiple.py): double-mutation runner
 - [bm_triple.py](./bm_triple.py): triple-mutation runner
 - [betamax_cpp](./betamax_cpp): C++ betaMax backend
-- [validators](./validators): optional native regex validators
+- [validators](./validators): native RE2 regex validators used by benchmark automation
 - [mutated_files](./mutated_files): mutation databases used as benchmark input
 - [repair_results](./repair_results): per-run outputs
 - [cache](./cache): precompute cache artifacts
@@ -193,6 +216,14 @@ Install the runtime:
 
 ```bash
 python -m pip install -r requirements.txt
+```
+
+### `Missing native regex validator 'validators/validate_*'`
+
+Install RE2, then build the validators:
+
+```bash
+./validators/build_validators.sh
 ```
 
 ### `betaMax C++ binary not found`

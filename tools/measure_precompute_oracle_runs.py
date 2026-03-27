@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from bm_lstar_mutations import get_mutation_table_name
+from bm_ddmax_backend import require_native_regex_validator
 
 
 REGEX_DIR_TO_CATEGORY: dict[str, str] = {
@@ -105,13 +106,8 @@ def _load_k_from_db(db_path: str, *, column: str, k: int) -> list[str]:
 
 def _choose_underlying_oracle_cmd(fmt: str, category: str) -> list[str]:
     if fmt in REGEX_FORMATS:
-        cand_bin = os.path.join("validators", f"validate_{fmt}")
-        cand_wrap = os.path.join("validators", "regex", f"validate_{fmt}")
-        if os.path.exists(cand_bin):
-            return [cand_bin]
-        if os.path.exists(cand_wrap):
-            return [cand_wrap]
-        return ["python3", "match.py", category]
+        _ = category
+        return [require_native_regex_validator(fmt)]
 
     subj = PROJECT_PATHS.get(fmt)
     if not subj:
@@ -190,37 +186,8 @@ def _build_precompute_cmd(
     eq_max_rounds: Optional[int],
 ) -> list[str]:
     eng = (engine or "").strip().lower()
-    if eng not in ("cpp", "python"):
-        raise RuntimeError(f"unknown engine: {engine}")
-
-    if eng == "python":
-        cmd: list[str] = [
-            "python3",
-            "betamax/app/betamax.py",
-            "--positives",
-            str(positives),
-            "--negatives",
-            str(negatives),
-            "--category",
-            category,
-            "--grammar-cache",
-            str(cache_path),
-            "--init-cache",
-            "--learner",
-            learner,
-        ]
-        cmd += ["--oracle-validator", str(oracle_validator)]
-        if eq_disable_sampling:
-            cmd += ["--eq-disable-sampling"]
-        if eq_max_length is not None:
-            cmd += ["--eq-max-length", str(int(eq_max_length))]
-        if eq_samples_per_length is not None:
-            cmd += ["--eq-samples-per-length", str(int(eq_samples_per_length))]
-        if eq_max_oracle is not None:
-            cmd += ["--eq-max-oracle", str(int(eq_max_oracle))]
-        if mutations > 0:
-            cmd += ["--mutations", str(int(mutations))]
-        return cmd
+    if eng != "cpp":
+        raise RuntimeError("Legacy Python betaMax backend support has been removed; only engine=cpp is supported.")
 
     exe = os.environ.get("BM_BETAMAX_CPP_BIN", "betamax_cpp/build/betamax_cpp")
     cmd = [
@@ -274,9 +241,9 @@ def main() -> int:
     )
     ap.add_argument(
         "--engine",
-        default=os.environ.get("BM_BETAMAX_ENGINE", "cpp"),
-        choices=["cpp", "python"],
-        help="betaMax backend engine to measure (default: env BM_BETAMAX_ENGINE or cpp)",
+        default="cpp",
+        choices=["cpp"],
+        help="betaMax backend engine to measure (only cpp is supported)",
     )
     ap.add_argument(
         "--formats",
