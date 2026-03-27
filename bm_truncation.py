@@ -100,7 +100,7 @@ def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
 
 
 def _runtime_betamax_learner() -> str:
-    return "rpni"
+    return "rpni_xover"
 
 
 def _cache_betamax_learner() -> str:

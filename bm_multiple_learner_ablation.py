@@ -3,7 +3,7 @@
 bm_multiple_learner_ablation.py
 -------------------------------
 Run bm_multiple.py multiple times while varying the BETAMAX learner
-(default: rpni vs rpni_xover) so we can measure the effect of different
+(pass `--learners` to compare alternatives) so we can measure the effect of different
 grammar learners on the same train/test splits.
 """
 
@@ -15,7 +15,7 @@ import subprocess
 import sys
 from typing import List
 
-DEFAULT_LEARNERS = ["rpni", "rpni_xover"]
+DEFAULT_LEARNERS = ["rpni_xover"]
 DEFAULT_DB_TEMPLATE = "double_{learner}.db"
 DEFAULT_TRAIN_K = 50
 DEFAULT_TEST_K = 50

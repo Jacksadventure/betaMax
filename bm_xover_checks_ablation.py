@@ -10,7 +10,7 @@ The key ablation variable is:
 
 This script keeps the current benchmark defaults:
   - precompute learner: `rpni_xover`
-  - refine-loop learner: `rpni`
+  - refine-loop learner: `rpni_xover`
 
 Each (mode, checks) run writes to its own SQLite database:
   {mode}_xcheck{checks}.db
@@ -220,12 +220,12 @@ def main() -> int:
             env["LSTAR_RPNI_XOVER_CHECKS"] = str(checks)
             env["LSTAR_RPNI_XOVER_PAIRS"] = str(args.pairs)
             env["LSTAR_CACHE_LEARNER"] = "rpni_xover"
-            env["LSTAR_LEARNER"] = "rpni"
+            env["LSTAR_LEARNER"] = "rpni_xover"
             env["BM_ABLATION_XOVER_CHECKS"] = str(checks)
 
             cmd = build_command(args, mode, db_path)
             print(f"[ABLATION] Running {mode} checks={checks}, pairs={args.pairs} -> DB {db_path}")
-            print("[ABLATION] Learners: cache=rpni_xover, runtime=rpni")
+            print("[ABLATION] Learners: cache=rpni_xover, runtime=rpni_xover")
             print(f"[ABLATION] CMD: {' '.join(cmd)}")
             if args.dry_run:
                 continue

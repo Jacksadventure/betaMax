@@ -142,7 +142,7 @@ def _cache_path(fmt: str, learner: Optional[str] = None) -> str:
 
 def _runtime_betamax_learner() -> str:
     """Return learner name for runtime BETAMAX invocation (fixed default for bm_*)."""
-    return "rpni"
+    return "rpni_xover"
 
 
 def _cache_betamax_learner() -> str:
@@ -182,7 +182,7 @@ def _normalize_learner_name(name: str) -> str:
     """
     n = (name or "").strip()
     if not n:
-        return "rpni"
+        return "rpni_xover"
     aliases = {
         "xover_rpni": "rpni_xover",
         "xover-rpni": "rpni_xover",
@@ -594,9 +594,7 @@ def repair_and_update_entry(cursor, conn, row):
         category = REGEX_DIR_TO_CATEGORY.get(base_format, base_format)
         runtime_learner = _runtime_betamax_learner()
         cache_learner = _cache_betamax_learner()
-        # Intentionally allow cache learner != runtime learner:
-        # - cache (often expensive) provides the initial grammar
-        # - runtime learner (often cheaper) is used for the iterative relearn loop on oracle failure
+        # Benchmarks use the same learner for cache init and runtime repair.
         cache_path = _cache_path(base_format, cache_learner)
         if not os.path.exists(cache_path):
             cache_path = _cache_path(base_format, runtime_learner)

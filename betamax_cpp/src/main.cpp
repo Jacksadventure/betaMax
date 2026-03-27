@@ -159,7 +159,7 @@ struct Options {
   bool init_cache = false;
   std::string category;
   std::optional<std::string> oracle_validator;
-  std::string learner = "rpni";
+  std::string learner = "rpni_xover";
   int xover_pairs = -1;   // -1 => read env / default
   int xover_checks = -1;  // -1 => read env / default
   int mutations = 0;
@@ -198,7 +198,7 @@ static void print_usage(const char* argv0) {
       << "  --init-cache                    (learn DFA and write --dfa-cache, then exit)\n"
       << "  --category <Date|ISO8601|Time|URL|ISBN|IPv4|IPv6|FilePath>\n"
       << "  --oracle-validator <cmd>\n"
-      << "  --learner <rpni|rpni_xover>     (default: rpni)\n"
+      << "  --learner <rpni|rpni_xover>     (default: rpni_xover)\n"
       << "  --xover-pairs <int>             (default env LSTAR_RPNI_XOVER_PAIRS or 50; 0 disables)\n"
       << "  --xover-checks <int>            (default env LSTAR_RPNI_XOVER_CHECKS or 10; 0 disables)\n"
       << "  --mutations <int>               (default: 0)\n"

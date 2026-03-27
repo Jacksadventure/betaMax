@@ -226,7 +226,7 @@ def _ensure_text(data: object) -> str:
 
 
 def _cache_path(fmt: str, learner: str, cache_root: str) -> str:
-    learner_name = (learner or "rpni").replace("-", "_")
+    learner_name = (learner or "rpni_xover").replace("-", "_")
     return os.path.join(cache_root, f"lstar_{fmt}_{learner_name}.dfa")
 
 
@@ -406,7 +406,10 @@ def main() -> None:
     ap.add_argument("--quiet", action="store_true", help="Suppress per-entry stdout/stderr dumps")
     ap.add_argument("--limit", type=int, help="Limit entries processed (after filtering)")
     ap.add_argument("--resume-only", action="store_true", help="Skip sample insertion; only run unfinished rows")
-    ap.add_argument("--learner", default=os.environ.get("BM_BETAMAX_LEARNER", os.environ.get("LSTAR_LEARNER", "rpni")))
+    ap.add_argument(
+        "--learner",
+        default=os.environ.get("BM_BETAMAX_LEARNER", os.environ.get("LSTAR_LEARNER", "rpni_xover")),
+    )
     ap.add_argument("--cache-root", default=os.environ.get("LSTAR_CACHE_ROOT", "cache"))
     args = ap.parse_args()
 

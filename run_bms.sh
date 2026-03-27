@@ -4,7 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 MAX_WORKERS="${MAX_WORKERS:-3}"
 MODE="${1:-quick}"
 if [[ $# -gt 0 ]]; then
@@ -15,7 +22,7 @@ EXTRA_ARGS=("$@")
 # Benchmark defaults used by the betaMax runners.
 export LSTAR_PRECOMPUTE_TIMEOUT="${LSTAR_PRECOMPUTE_TIMEOUT:-18000}"
 export LSTAR_CACHE_LEARNER="${LSTAR_CACHE_LEARNER:-rpni_xover}"
-export LSTAR_LEARNER="${LSTAR_LEARNER:-rpni}"
+export LSTAR_LEARNER="${LSTAR_LEARNER:-rpni_xover}"
 export LSTAR_PARSE_TIMEOUT="${LSTAR_PARSE_TIMEOUT:-600}"
 export LSTAR_EC_TIMEOUT="${LSTAR_EC_TIMEOUT:-600}"
 export LSTAR_PRECOMPUTE_MUTATIONS="${LSTAR_PRECOMPUTE_MUTATIONS:-60}"
@@ -40,6 +47,10 @@ has_flag() {
     fi
   done
   return 1
+}
+
+has_extra_flag() {
+  has_flag "$1" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 }
 
 print_cmd() {
@@ -82,7 +93,7 @@ selected_formats_from_args() {
   local -a values=()
   local capture=0
   local arg
-  for arg in "${EXTRA_ARGS[@]}"; do
+  for arg in "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; do
     if [[ "$capture" == "1" ]]; then
       if [[ "$arg" == --* ]]; then
         break
@@ -106,7 +117,7 @@ ensure_native_regex_validators() {
   local fmt
   local validator
 
-  for fmt in "${requested[@]}"; do
+  for fmt in "${requested[@]+"${requested[@]}"}"; do
     if is_regex_format "$fmt"; then
       needed+=("$fmt")
     fi
@@ -116,7 +127,7 @@ ensure_native_regex_validators() {
     return 0
   fi
 
-  for fmt in "${needed[@]}"; do
+  for fmt in "${needed[@]+"${needed[@]}"}"; do
     validator="validators/validate_${fmt}"
     if [[ ! -x "$validator" ]]; then
       echo "[INFO] Native RE2 validator '$validator' not found. Building validators..."
@@ -127,7 +138,7 @@ ensure_native_regex_validators() {
     fi
   done
 
-  for fmt in "${needed[@]}"; do
+  for fmt in "${needed[@]+"${needed[@]}"}"; do
     validator="validators/validate_${fmt}"
     [[ -x "$validator" ]] || die "Missing native regex validator '$validator'. Install RE2 and run './validators/build_validators.sh'."
   done
@@ -177,10 +188,10 @@ ensure_mutation_dbs() {
 }
 
 ensure_truncation_subjects() {
-  if has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if has_extra_flag "--formats"; then
     return 0
   fi
-  if has_flag "--truncated-json-validator" "${EXTRA_ARGS[@]}"; then
+  if has_extra_flag "--truncated-json-validator"; then
     return 0
   fi
   if [[ -n "${BM_TRUNCATED_JSON_VALIDATOR:-}" ]]; then
@@ -197,27 +208,27 @@ run_single() {
   while IFS= read -r fmt; do
     selected_formats+=("$fmt")
   done < <(selected_formats_from_args "${DEFAULT_REGEX_FORMATS[@]}")
-  ensure_native_regex_validators "${selected_formats[@]}"
+  ensure_native_regex_validators "${selected_formats[@]+"${selected_formats[@]}"}"
   ensure_betamax_backend
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     ensure_mutation_dbs single "${DEFAULT_REGEX_FORMATS[@]}"
   fi
   local db_name
   db_name="$(default_db_path single)"
   local -a cmd=("$PYTHON_BIN" "bm_single.py")
-  if ! has_flag "--db" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--db"; then
     cmd+=(--db "$db_name")
   fi
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     cmd+=(--formats "${DEFAULT_REGEX_FORMATS[@]}")
   fi
-  if ! has_flag "--algorithms" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--algorithms"; then
     cmd+=(--algorithms betamax)
   fi
-  if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--max-workers"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  cmd+=("${EXTRA_ARGS[@]}")
+  cmd+=("${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
 }
@@ -227,27 +238,27 @@ run_double() {
   while IFS= read -r fmt; do
     selected_formats+=("$fmt")
   done < <(selected_formats_from_args "${DEFAULT_REGEX_FORMATS[@]}")
-  ensure_native_regex_validators "${selected_formats[@]}"
+  ensure_native_regex_validators "${selected_formats[@]+"${selected_formats[@]}"}"
   ensure_betamax_backend
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     ensure_mutation_dbs double "${DEFAULT_REGEX_FORMATS[@]}"
   fi
   local db_name
   db_name="$(default_db_path double)"
   local -a cmd=("$PYTHON_BIN" "bm_multiple.py")
-  if ! has_flag "--db" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--db"; then
     cmd+=(--db "$db_name")
   fi
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     cmd+=(--formats "${DEFAULT_REGEX_FORMATS[@]}")
   fi
-  if ! has_flag "--algorithms" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--algorithms"; then
     cmd+=(--algorithms betamax)
   fi
-  if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--max-workers"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  cmd+=("${EXTRA_ARGS[@]}")
+  cmd+=("${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
 }
@@ -257,27 +268,27 @@ run_triple() {
   while IFS= read -r fmt; do
     selected_formats+=("$fmt")
   done < <(selected_formats_from_args "${DEFAULT_REGEX_FORMATS[@]}")
-  ensure_native_regex_validators "${selected_formats[@]}"
+  ensure_native_regex_validators "${selected_formats[@]+"${selected_formats[@]}"}"
   ensure_betamax_backend
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     ensure_mutation_dbs triple "${DEFAULT_REGEX_FORMATS[@]}"
   fi
   local db_name
   db_name="$(default_db_path triple)"
   local -a cmd=("$PYTHON_BIN" "bm_triple.py")
-  if ! has_flag "--db" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--db"; then
     cmd+=(--db "$db_name")
   fi
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     cmd+=(--formats "${DEFAULT_REGEX_FORMATS[@]}")
   fi
-  if ! has_flag "--algorithms" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--algorithms"; then
     cmd+=(--algorithms betamax)
   fi
-  if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--max-workers"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  cmd+=("${EXTRA_ARGS[@]}")
+  cmd+=("${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
 }
@@ -295,30 +306,30 @@ run_quick() {
   while IFS= read -r fmt; do
     selected_formats+=("$fmt")
   done < <(selected_formats_from_args "${quick_formats[@]}")
-  ensure_native_regex_validators "${selected_formats[@]}"
+  ensure_native_regex_validators "${selected_formats[@]+"${selected_formats[@]}"}"
   ensure_betamax_backend
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     ensure_mutation_dbs single "${quick_formats[@]}"
   fi
   local db_name
   db_name="$(default_db_path smoke_single)"
   local -a cmd=("$PYTHON_BIN" "bm_single.py")
-  if ! has_flag "--db" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--db"; then
     cmd+=(--db "$db_name")
   fi
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     cmd+=(--formats "${quick_formats[@]}")
   fi
-  if ! has_flag "--limit" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--limit"; then
     cmd+=(--limit "$quick_limit")
   fi
-  if ! has_flag "--algorithms" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--algorithms"; then
     cmd+=(--algorithms betamax)
   fi
-  if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--max-workers"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  cmd+=("${EXTRA_ARGS[@]}")
+  cmd+=("${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}")
   printf '[RUN] %s=%q %s=%q' \
     "LSTAR_PRECOMPUTE_MUTATIONS" "$quick_precompute" \
     "BM_LSTAR_MUTATION_COUNT" "$quick_precompute"
@@ -333,7 +344,7 @@ run_quick() {
 }
 
 run_regex_suite() {
-  if has_flag "--db" "${EXTRA_ARGS[@]}"; then
+  if has_extra_flag "--db"; then
     die "Do not pass --db with mode 'regex'. Use DB_PREFIX=<name> ./run_bms.sh regex or run single/double/triple separately."
   fi
   run_single
@@ -347,19 +358,19 @@ run_truncation() {
   local db_name
   db_name="$(default_db_path truncation)"
   local -a cmd=("$PYTHON_BIN" "bm_truncation.py")
-  if ! has_flag "--db" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--db"; then
     cmd+=(--db "$db_name")
   fi
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     cmd+=(--formats json)
   fi
-  if ! has_flag "--algorithms" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--algorithms"; then
     cmd+=(--algorithms betamax)
   fi
-  if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--max-workers"; then
     cmd+=(--max-workers "$MAX_WORKERS")
   fi
-  cmd+=("${EXTRA_ARGS[@]}")
+  cmd+=("${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}")
   print_cmd "${cmd[@]}"
   "${cmd[@]}"
 }
@@ -421,7 +432,7 @@ case "$MODE" in
     run_truncation
     ;;
   all)
-    if has_flag "--db" "${EXTRA_ARGS[@]}"; then
+    if has_extra_flag "--db"; then
       die "Do not pass --db with mode 'all'. Use DB_PREFIX=<name> ./run_bms.sh all."
     fi
     run_regex_suite

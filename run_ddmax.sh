@@ -4,7 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [[ -z "$PYTHON_BIN" ]]; then
+  if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 MAX_WORKERS="${MAX_WORKERS:-1}"
 MODE="${1:-${DDMAX_FORMAT_SET:-regex}}"
 if [[ $# -gt 0 ]]; then
@@ -34,6 +41,10 @@ has_flag() {
     fi
   done
   return 1
+}
+
+has_extra_flag() {
+  has_flag "$1" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
 }
 
 print_cmd() {
@@ -83,7 +94,7 @@ resolve_formats() {
   else
     values=("${DEFAULT_REGEX_FORMATS[@]}")
   fi
-  printf '%s\n' "${values[@]}"
+  printf '%s\n' "${values[@]+"${values[@]}"}"
 }
 
 selected_formats_for_mode() {
@@ -92,7 +103,7 @@ selected_formats_for_mode() {
   local capture=0
   local arg
 
-  for arg in "${EXTRA_ARGS[@]}"; do
+  for arg in "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"; do
     if [[ "$capture" == "1" ]]; then
       if [[ "$arg" == --* ]]; then
         break
@@ -107,7 +118,7 @@ selected_formats_for_mode() {
     resolve_formats "$mode"
     return 0
   fi
-  printf '%s\n' "${values[@]}"
+  printf '%s\n' "${values[@]+"${values[@]}"}"
 }
 
 ensure_native_regex_validators() {
@@ -116,7 +127,7 @@ ensure_native_regex_validators() {
   local fmt
   local validator
 
-  for fmt in "${requested[@]}"; do
+  for fmt in "${requested[@]+"${requested[@]}"}"; do
     if is_regex_format "$fmt"; then
       needed+=("$fmt")
     fi
@@ -126,7 +137,7 @@ ensure_native_regex_validators() {
     return 0
   fi
 
-  for fmt in "${needed[@]}"; do
+  for fmt in "${needed[@]+"${needed[@]}"}"; do
     validator="validators/validate_${fmt}"
     if [[ ! -x "$validator" ]]; then
       echo "[INFO] Native RE2 validator '$validator' not found. Building validators..."
@@ -137,7 +148,7 @@ ensure_native_regex_validators() {
     fi
   done
 
-  for fmt in "${needed[@]}"; do
+  for fmt in "${needed[@]+"${needed[@]}"}"; do
     validator="validators/validate_${fmt}"
     [[ -x "$validator" ]] || die "Missing native regex validator '$validator'. Install RE2 and run './validators/build_validators.sh'."
   done
@@ -176,7 +187,7 @@ ensure_subject_prereqs() {
 
 run_suite() {
   local mode="$1"
-  if has_flag "--db" "${EXTRA_ARGS[@]}"; then
+  if has_extra_flag "--db"; then
     die "Do not pass --db when a full DDMax suite is run. Use DB_PREFIX=<name> ./run_ddmax.sh ${mode} instead."
   fi
 
@@ -189,7 +200,7 @@ run_suite() {
     die "No formats selected for mode '$mode'."
   fi
 
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     ensure_mutation_dbs single "${formats[@]}"
     ensure_mutation_dbs double "${formats[@]}"
     ensure_mutation_dbs triple "${formats[@]}"
@@ -208,23 +219,23 @@ run_suite() {
   triple_db="$(default_db_path ddmax_triple)"
 
   local -a common_args=()
-  if ! has_flag "--formats" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--formats"; then
     common_args+=(--formats "${formats[@]}")
   fi
-  if ! has_flag "--algorithms" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--algorithms"; then
     common_args+=(--algorithms ddmax)
   fi
-  if ! has_flag "--max-workers" "${EXTRA_ARGS[@]}"; then
+  if ! has_extra_flag "--max-workers"; then
     common_args+=(--max-workers "$MAX_WORKERS")
   fi
-  common_args+=("${EXTRA_ARGS[@]}")
+  common_args+=("${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}")
 
   local -a cmd_single=("$PYTHON_BIN" "bm_single.py" --db "$single_db")
   local -a cmd_double=("$PYTHON_BIN" "bm_multiple.py" --db "$double_db")
   local -a cmd_triple=("$PYTHON_BIN" "bm_triple.py" --db "$triple_db")
-  cmd_single+=("${common_args[@]}")
-  cmd_double+=("${common_args[@]}")
-  cmd_triple+=("${common_args[@]}")
+  cmd_single+=("${common_args[@]+"${common_args[@]}"}")
+  cmd_double+=("${common_args[@]+"${common_args[@]}"}")
+  cmd_triple+=("${common_args[@]+"${common_args[@]}"}")
 
   print_cmd "${cmd_single[@]}"
   "${cmd_single[@]}"

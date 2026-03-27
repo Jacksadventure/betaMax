@@ -35,7 +35,7 @@ DEFAULT_MODES = ["single", "double", "triple"]
 DEFAULT_TEST_K = 50
 DEFAULT_TRAIN_K = 50
 DEFAULT_CACHE_LEARNER = "rpni_xover"
-DEFAULT_RUNTIME_LEARNER = "rpni"
+DEFAULT_RUNTIME_LEARNER = "rpni_xover"
 DEFAULT_SCRIPTS = {
     "single": "bm_single.py",
     "double": "bm_multiple.py",
