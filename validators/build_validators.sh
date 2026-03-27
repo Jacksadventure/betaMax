@@ -9,13 +9,58 @@ die() {
   exit 1
 }
 
-: "${CXX:=}"
-if [[ -z "$CXX" ]]; then
-  if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun >/dev/null 2>&1; then
-    CXX="$(xcrun --sdk macosx --find clang++ 2>/dev/null || true)"
+resolve_executable() {
+  local candidate="$1"
+  if [[ -z "$candidate" ]]; then
+    return 1
   fi
-  CXX="${CXX:-clang++}"
-fi
+  if [[ "$candidate" == */* ]]; then
+    [[ -x "$candidate" ]] || return 1
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  command -v "$candidate" 2>/dev/null || return 1
+}
+
+find_clangxx() {
+  local candidate
+
+  if [[ -n "${CXX:-}" ]]; then
+    candidate="$(resolve_executable "$CXX" || true)"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun >/dev/null 2>&1; then
+    candidate="$(xcrun --sdk macosx --find clang++ 2>/dev/null || true)"
+    if [[ -n "$candidate" ]] && [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  for candidate in clang++ /opt/homebrew/opt/llvm/bin/clang++ /usr/local/opt/llvm/bin/clang++; do
+    candidate="$(resolve_executable "$candidate" || true)"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+set_clang_env() {
+  local clangxx="$1"
+  local clang="${clangxx%++}"
+  export CXX="$clangxx"
+  if [[ -x "$clang" ]]; then
+    export CC="$clang"
+  fi
+}
+
 STD_FLAGS=(-std=c++17)
 OPT_FLAGS=(-O3 -DNDEBUG)
 
@@ -54,6 +99,57 @@ run_as_root() {
   fi
   return 1
 }
+
+install_clangxx() {
+  case "$(uname -s)" in
+    Darwin)
+      if command -v brew >/dev/null 2>&1; then
+        echo "[INFO] clang++ not found. Installing 'llvm' with Homebrew..."
+        HOMEBREW_NO_AUTO_UPDATE="${HOMEBREW_NO_AUTO_UPDATE:-1}" brew install llvm
+      elif command -v xcode-select >/dev/null 2>&1; then
+        echo "[INFO] clang++ not found. Triggering Xcode Command Line Tools installation..."
+        xcode-select --install >/dev/null 2>&1 || true
+        die "clang++ is required. Xcode Command Line Tools installation has been requested; rerun after it completes."
+      else
+        die "clang++ is missing and no supported installer was detected. Install Homebrew/LLVM or Xcode Command Line Tools."
+      fi
+      ;;
+    Linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "[INFO] clang++ not found. Installing 'clang' with apt-get..."
+        run_as_root apt-get update || die "clang++ is missing and apt-get update requires root access."
+        run_as_root apt-get install -y clang || die "Failed to install clang with apt-get."
+      elif command -v dnf >/dev/null 2>&1; then
+        echo "[INFO] clang++ not found. Installing 'clang' with dnf..."
+        run_as_root dnf install -y clang || die "Failed to install clang with dnf."
+      elif command -v yum >/dev/null 2>&1; then
+        echo "[INFO] clang++ not found. Installing 'clang' with yum..."
+        run_as_root yum install -y clang || die "Failed to install clang with yum."
+      else
+        die "clang++ is missing and no supported package manager was detected. Install clang manually."
+      fi
+      ;;
+    *)
+      die "clang++ is missing and this platform is not supported for automatic installation."
+      ;;
+  esac
+}
+
+ensure_clangxx_installed() {
+  local clangxx
+  clangxx="$(find_clangxx || true)"
+  if [[ -n "$clangxx" ]]; then
+    set_clang_env "$clangxx"
+    return 0
+  fi
+
+  install_clangxx
+  clangxx="$(find_clangxx || true)"
+  [[ -n "$clangxx" ]] || die "clang++ installation finished but no compiler was found on PATH or in the standard LLVM locations."
+  set_clang_env "$clangxx"
+}
+
+ensure_clangxx_installed
 
 install_re2() {
   case "$(uname -s)" in

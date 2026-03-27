@@ -62,6 +62,64 @@ print_cmd() {
   printf '\n'
 }
 
+resolve_executable() {
+  local candidate="$1"
+  if [[ -z "$candidate" ]]; then
+    return 1
+  fi
+  if [[ "$candidate" == */* ]]; then
+    [[ -x "$candidate" ]] || return 1
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  command -v "$candidate" 2>/dev/null || return 1
+}
+
+find_clangxx() {
+  local candidate
+
+  if [[ -n "${CXX:-}" ]]; then
+    candidate="$(resolve_executable "$CXX" || true)"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  if [[ "$(uname -s)" == "Darwin" ]] && command -v xcrun >/dev/null 2>&1; then
+    candidate="$(xcrun --sdk macosx --find clang++ 2>/dev/null || true)"
+    if [[ -n "$candidate" ]] && [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  fi
+
+  for candidate in clang++ /opt/homebrew/opt/llvm/bin/clang++ /usr/local/opt/llvm/bin/clang++; do
+    candidate="$(resolve_executable "$candidate" || true)"
+    if [[ -n "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+configure_clang_toolchain_env() {
+  local clangxx
+  local clang
+
+  clangxx="$(find_clangxx || true)"
+  [[ -n "$clangxx" ]] || return 1
+
+  export CXX="$clangxx"
+  clang="${clangxx%++}"
+  if [[ -x "$clang" ]]; then
+    export CC="$clang"
+  fi
+  return 0
+}
+
 require_command() {
   local cmd="$1"
   local hint="$2"
@@ -161,6 +219,11 @@ default_db_path() {
 ensure_cpp_engine() {
   if [[ -x "betamax_cpp/build/betamax_cpp" ]]; then
     return 0
+  fi
+  if ! configure_clang_toolchain_env; then
+    echo "[INFO] clang++ not found. Bootstrapping the compiler toolchain via validators/build_validators.sh..."
+    build_all_native_regex_validators
+    configure_clang_toolchain_env || die "clang++ is still unavailable after automatic installation."
   fi
   require_command cmake "Install CMake or build betamax_cpp manually."
   echo "[INFO] betamax_cpp/build/betamax_cpp not found. Building the C++ backend..."

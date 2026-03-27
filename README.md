@@ -10,7 +10,7 @@ The easiest path after cloning is:
 
 1. Install the small Python runtime from [requirements.txt](./requirements.txt).
 2. Run [run_bms.sh](./run_bms.sh).
-3. Let the script build `betamax_cpp/build/betamax_cpp` and `validators/validate_*` automatically if they are missing.
+3. Let the script bootstrap `clang++`/RE2 when possible, then build `betamax_cpp/build/betamax_cpp` and `validators/validate_*` automatically if they are missing.
 
 What works cleanly in this checkout:
 
@@ -29,7 +29,7 @@ For the main regex benchmark workflow (`run_bms.sh quick|single|double|triple|re
 - Python 3.10+
 - `pip` and `venv` for the recommended isolated environment setup
 - CMake 3.16+ to build the bundled C++ backend in [betamax_cpp](./betamax_cpp)
-- A C++17 compiler such as `clang++` or `g++`
+- A C++17 compiler such as `clang++`
 - RE2 headers and libraries, because the benchmark automation uses native RE2-backed validators under [validators](./validators)
 - The pre-generated mutation databases under [mutated_files](./mutated_files), which the benchmark runners expect to exist
 
@@ -44,7 +44,17 @@ Optional or workflow-specific dependencies:
 - `make`: only needed if you want the shortcuts in [Makefile](./Makefile)
 - `pkg-config`: optional, but helps [validators/build_validators.sh](./validators/build_validators.sh) locate RE2 cleanly
 
-The standard regex quickstart in this checkout does **not** require Java, Gradle, or the optional subject-build toolchain, but it **does** require RE2 because betaMax benchmarks use the native RE2 validators.
+The standard regex quickstart in this checkout does **not** require Java, Gradle, or the optional subject-build toolchain.
+
+For `./run_bms.sh quick`, the launcher now tries to bootstrap missing native dependencies automatically:
+
+- missing `clang++`:
+  on macOS it prefers `brew install llvm`; if Homebrew is unavailable but `xcode-select` exists, it requests Xcode Command Line Tools installation and asks you to rerun after that completes
+- missing RE2:
+  on macOS it runs `brew install re2 pkg-config`
+  on Linux it uses `apt-get`, `dnf`, or `yum` when available
+
+Automatic installation still depends on a usable package manager and, on Linux, sufficient privileges.
 
 ## Quick Start
 
@@ -69,8 +79,9 @@ Run a small smoke benchmark:
 
 This default smoke run:
 
+- installs `clang++` and RE2 automatically when supported package-manager access is available
 - builds `betamax_cpp/build/betamax_cpp` automatically if needed
-- builds `validators/validate_*` automatically if needed
+- builds all native regex validators automatically
 - runs a small single-mutation benchmark
 - writes results to `smoke_single.db`
 
@@ -162,7 +173,7 @@ Build them manually if you want to prepare the environment ahead of time:
 ./validators/build_validators.sh
 ```
 
-If they are missing, [run_bms.sh](./run_bms.sh) and [run_ddmax.sh](./run_ddmax.sh) try to build them automatically before starting the regex benchmarks.
+If they are missing, [run_bms.sh](./run_bms.sh) and [run_ddmax.sh](./run_ddmax.sh) try to build them automatically before starting the regex benchmarks. `run_bms.sh quick` now rebuilds the full validator set up front, and [validators/build_validators.sh](./validators/build_validators.sh) will also try to install missing `clang++` / RE2 dependencies when a supported package manager is available.
 
 ## Outputs
 
@@ -220,11 +231,32 @@ python -m pip install -r requirements.txt
 
 ### `Missing native regex validator 'validators/validate_*'`
 
-Install RE2, then build the validators:
+Either rerun:
+
+```bash
+./run_bms.sh quick
+```
+
+to let the launcher try automatic installation/build, or install RE2 yourself and build the validators explicitly:
 
 ```bash
 ./validators/build_validators.sh
 ```
+
+If automatic installation is unavailable, check that Homebrew (`brew`) is installed on macOS, or that `apt-get` / `dnf` / `yum` plus the required privileges are available on Linux.
+
+### `clang++ not found`
+
+Either rerun:
+
+```bash
+./run_bms.sh quick
+```
+
+to let the launcher try automatic installation, or install the compiler toolchain yourself:
+
+- macOS: `brew install llvm`, or install Xcode Command Line Tools
+- Linux: install `clang` with your system package manager
 
 ### `betaMax C++ binary not found`
 
