@@ -1,9 +1,9 @@
 # betaMax (pure C++ implementation)
 
-This folder contains a **standalone C++** betaMax-style implementation (separate from the original Python engine; no existing code is modified).
+This folder contains a **standalone C++** betaMax implementation.
 
 High-level flow:
-- Learn a DFA from positive/negative examples (RPNI / Blue-Fringe).
+- Learn a DFA from positive/negative examples.
 - Search for candidate repairs with minimum edit cost that are accepted by the DFA.
 - Validate candidates with the repository’s C++ validators (oracle) and return the first oracle-accepted repair.
 
