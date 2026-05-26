@@ -8,9 +8,9 @@ This repository snapshot is organized around the **C++ betaMax backend** in [bet
 
 The easiest path after cloning is:
 
-1. Install the small Python runtime from [requirements.txt](./requirements.txt).
-2. Run [run_bms.sh](./run_bms.sh).
-3. Let the script bootstrap `clang++`/RE2 when possible, then build `betamax_cpp/build/betamax_cpp` and `validators/validate_*` automatically if they are missing.
+1. Build the Docker image from [Dockerfile](./Dockerfile).
+2. Run the container with a mounted result directory.
+3. Let the image run the full regex benchmark suite by default.
 
 What works cleanly in this checkout:
 
@@ -22,7 +22,124 @@ Important:
 
 - This checkout supports the bundled C++ betaMax backend only.
 
-## Dependencies
+## Docker Quick Start
+
+Docker is the recommended way to run this checkout because it packages the native compiler, CMake, RE2, Python runtime, C++ betaMax backend, and validators into one reproducible image.
+
+Build the image:
+
+```bash
+docker build -t betamax:latest .
+```
+
+Run the full regex benchmark suite and keep the output databases on the host:
+
+```bash
+mkdir -p docker-results
+docker run --rm \
+  -v "$PWD/docker-results:/results" \
+  betamax:latest
+```
+
+By default, the container runs:
+
+```bash
+./run_bms.sh regex
+```
+
+and writes:
+
+- `docker-results/betamax_single.db`
+- `docker-results/betamax_double.db`
+- `docker-results/betamax_triple.db`
+
+To run a smaller smoke test instead:
+
+```bash
+docker run --rm \
+  -v "$PWD/docker-results:/results" \
+  betamax:latest quick --db /results/smoke_single.db
+```
+
+Pass any [run_bms.sh](./run_bms.sh) mode and arguments after the image name:
+
+```bash
+docker run --rm -v "$PWD/docker-results:/results" betamax:latest single --formats date url --limit 10
+docker run --rm -v "$PWD/docker-results:/results" -e DB_PREFIX=/results/trial1 betamax:latest regex
+```
+
+The Docker image packages the main regex benchmark workflow. Subject/truncation workflows still require their additional subject artifacts to be built separately.
+
+Export the image for offline distribution if needed:
+
+```bash
+docker save betamax:latest | gzip > betamax_latest.tar.gz
+docker load < betamax_latest.tar.gz
+```
+
+The image entrypoint is [run_bms.sh](./run_bms.sh). To run DDMax instead, override the entrypoint:
+
+```bash
+docker run --rm --entrypoint ./run_ddmax.sh betamax:latest regex
+```
+
+The Docker build installs the native system dependencies, installs [requirements.txt](./requirements.txt), builds [betamax_cpp](./betamax_cpp), and builds the RE2 validators under [validators](./validators).
+
+## Time Limit Sweep Experiment
+
+To compare betaMax and eRepair over different per-repair time limits, run the sweep script inside Docker. Each timeout gets its own SQLite DB per mutation mode; betaMax and eRepair are run on the same selected samples, and accuracy is reported as `fixed / attempted`.
+
+Pilot run, useful before committing to the full sweep:
+
+```bash
+mkdir -p docker-results
+docker run --rm \
+  -v "$PWD/docker-results:/results" \
+  --entrypoint python3 \
+  betamax:latest tools/sweep_time_limits.py \
+    --force \
+    --modes single \
+    --formats date \
+    --timeouts 5 10 30 \
+    --limit 3 \
+    --max-workers 1
+```
+
+Full regex sweep:
+
+```bash
+mkdir -p docker-results
+docker run --rm \
+  -v "$PWD/docker-results:/results" \
+  --entrypoint python3 \
+  betamax:latest tools/sweep_time_limits.py \
+    --force \
+    --modes single double triple \
+    --formats date time isbn ipv4 ipv6 url \
+    --timeouts 5 10 30 60 120 300 600 \
+    --max-workers 3
+```
+
+The script writes:
+
+- `docker-results/time_limit_sweep/summary.csv`: overall accuracy, timeout rate, repair-time summaries, and edit-distance summaries by mode, timeout, and algorithm
+- `docker-results/time_limit_sweep/by_format.csv`: the same metrics broken down by benchmark format
+- `docker-results/time_limit_sweep/summary.md`: a Markdown table for quick inspection
+- `docker-results/time_limit_sweep/accuracy_vs_timeout.png`: accuracy curves for betaMax and eRepair
+- `docker-results/time_limit_sweep/db/`: raw SQLite databases for each mode/timeout pair
+- `docker-results/time_limit_sweep/logs/`: per-run logs
+
+The edit-distance columns are:
+
+- `mean_input_edit_distance`: mean distance from original input to corrupted input among attempted rows
+- `mean_success_broken_repaired_distance`: mean distance from corrupted input to repaired output among successful repairs
+- `mean_success_original_repaired_distance`: mean distance from original input to repaired output among successful repairs
+
+The sweep controls the shared per-entry repair limit with `BM_REPAIR_TIMEOUT=<seconds>` and also sets `LSTAR_EC_TIMEOUT=<seconds>` for betaMax so both algorithms are evaluated under the same timeout budget. The optional `--limit` flag is intended for pilot runs; omit it for the full experiment. Summary files count attempted rows only, so unprocessed placeholder rows in resumed or limited DBs are excluded from the accuracy denominator.
+
+## Local Dependencies
+
+You only need this section if you are not using Docker.
 
 For the main regex benchmark workflow (`run_bms.sh quick|single|double|triple|regex`), the required system dependencies are:
 
@@ -56,7 +173,7 @@ For `./run_bms.sh quick`, the launcher now tries to bootstrap missing native dep
 
 Automatic installation still depends on a usable package manager and, on Linux, sufficient privileges.
 
-## Quick Start
+## Local Setup
 
 After the dependencies above are available, clone the repository, create a virtual environment, and install the Python runtime:
 

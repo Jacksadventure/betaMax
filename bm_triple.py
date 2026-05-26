@@ -196,10 +196,17 @@ def _normalize_learner_name(name: str) -> str:
     return aliases.get(n, n)
 
 # Parser timeout (in seconds)
-VALIDATION_TIMEOUT = 300
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except Exception:
+        return default
+
+
+VALIDATION_TIMEOUT = _env_int("BM_VALIDATION_TIMEOUT", 300)
 
 # Repair timeout (in seconds)
-REPAIR_TIMEOUT = 300
+REPAIR_TIMEOUT = _env_int("BM_REPAIR_TIMEOUT", 300)
 
 # Verbosity and run-control
 QUIET = False          # suppress per-entry stdout/stderr and noisy logs

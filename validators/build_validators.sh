@@ -212,7 +212,7 @@ echo "  CXX=$CXX"
 echo "  FLAGS=${STD_FLAGS[*]} ${OPT_FLAGS[*]}"
 echo "  RE2_CFLAGS=${RE2_CFLAGS[*]}"
 echo "  RE2_LIBDIRS=${RE2_LIBDIRS[*]}"
-echo "  RE2_LIBS=${RE2_LIBS[*]} ${RE2_OTHER[*]}"
+echo "  RE2_LIBS=${RE2_LIBS[*]} ${RE2_OTHER[*]-}"
 
 shopt -s nullglob
 SOURCES=("$VALIDATORS_DIR"/*.cpp)
@@ -224,7 +224,12 @@ fi
 for src in "${SOURCES[@]}"; do
   out="${src%.cpp}"
   echo "[BUILD] $(basename "$src") -> $(basename "$out")"
-  "$CXX" "${STD_FLAGS[@]}" "${OPT_FLAGS[@]}" "${RE2_CFLAGS[@]}" "$src" "${RE2_LIBDIRS[@]}" "${RE2_LIBS[@]}" "${RE2_OTHER[@]}" -o "$out"
+  cmd=("$CXX" "${STD_FLAGS[@]}" "${OPT_FLAGS[@]}" "${RE2_CFLAGS[@]}" "$src" "${RE2_LIBDIRS[@]}" "${RE2_LIBS[@]}")
+  if ((${#RE2_OTHER[@]} > 0)); then
+    cmd+=("${RE2_OTHER[@]}")
+  fi
+  cmd+=(-o "$out")
+  "${cmd[@]}"
 done
 
 echo "[OK] Built ${#SOURCES[@]} validators."

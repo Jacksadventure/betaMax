@@ -10,6 +10,7 @@
 #include <cctype>
 #include <deque>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <iostream>
 #include <optional>
