@@ -119,6 +119,7 @@ project/repair_results/
 /*.ipv4
 /*.ipv6
 /*.isbn
+/*.time
 
 #result
 repair_results/

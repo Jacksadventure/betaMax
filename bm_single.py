@@ -716,7 +716,7 @@ def repair_and_update_entry(cursor, conn, row):
             broken_file=input_file,
             output_file=output_file,
             attempts=attempts,
-            mutations=0,
+            mutations=60,
             learner=runtime_learner,
             oracle_cmd=oracle_cmd,
         )
