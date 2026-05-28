@@ -90,6 +90,7 @@ mutated_files/
 repair_results/
 docker-results/
 time_limit_sweep_results/
+time_limit_sweep_results copy/
 betamax_latest.tar.gz
 cache/
 cache*/
@@ -111,6 +112,7 @@ project/repair_results/
 .png
 
 #input files
+temp_*_input.*
 /*.txt
 /*.csv
 /*.json

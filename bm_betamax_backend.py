@@ -93,6 +93,7 @@ def build_cmd_cpp(
     if cache_path:
         cmd += ["--dfa-cache", cache_path]
     # The C++ engine supports mutation-based augmentation via --mutations.
+    mutations = int(os.environ.get("BM_CPP_MUTATIONS", str(mutations)))
     _ = attempts  # reserved for future parity options
     if int(mutations) > 0:
         cmd += ["--mutations", str(int(mutations))]
