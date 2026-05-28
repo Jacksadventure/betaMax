@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-mutation_triple.py  (three-byte mutation: find p1, p2, p3 separately first)
-----------------------------------------------------------------------------
+mutation_triple.py  (three-byte contiguous mutation)
+----------------------------------------------------
 
-For each file:
-    • Find a byte position p1 whose single-byte mutation breaks validation.
-    • Find a different byte position p2 whose single-byte mutation also breaks validation.
-    • Find a different byte position p3 whose single-byte mutation also breaks validation.
-    • Apply all three mutations together; if the triple mutation also fails, record the triple.
+For each file, try contiguous three-byte spans directly.  A span is recorded as
+soon as applying mutations across that span makes the validator fail.
 
-Only one (p1,p2,p3) triple is stored per original file.
+Only one contiguous (p,p+1,p+2) triple is stored per original file.
 """
 
 from __future__ import annotations
@@ -100,34 +97,39 @@ def store_triple(
     conn.commit()
 
 
-def find_single_fault(
+def find_contiguous_fault(
     data: bytes,
     validator: str,
     path: Path,
-    exclude: set[int],
+    span_len: int,
     max_attempts: int,
     prefix_len: int | None = None,
-) -> int | None:
-    """Return a position whose single-byte mutation (replace/delete/insert) fails, else None."""
-    tmp = path.with_suffix(".tmp_mut_single")
+) -> tuple[Tuple[int, ...], bytearray] | None:
+    """Return a contiguous span whose combined mutation fails validation."""
+    if len(data) < span_len:
+        return None
+
+    tmp = path.with_suffix(f".tmp_mut_span{span_len}")
     tries = 0
     while tries < max_attempts:
         tries += 1
         if prefix_len is not None and random.random() < 0.8:
-            upper = min(len(data), prefix_len)
+            upper = min(len(data), prefix_len) - span_len + 1
             if upper <= 0:
                 continue
-            pos = random.randrange(upper)
+            start = random.randrange(upper)
         else:
-            pos = random.randrange(len(data))
-        if pos in exclude or data[pos] == ord('"'):
+            start = random.randrange(len(data) - span_len + 1)
+
+        positions = tuple(range(start, start + span_len))
+        if any(data[pos] == ord('"') for pos in positions):
             continue
 
-        mutated = mutate_at_positions(bytearray(data), pos)
+        mutated = mutate_at_positions(bytearray(data), *positions)
         tmp.write_bytes(mutated)
         if not run_validator(validator, tmp):
             tmp.unlink(missing_ok=True)
-            return pos
+            return positions, mutated
 
     tmp.unlink(missing_ok=True)
     return None
@@ -163,42 +165,20 @@ def process_file(
 
     focus_prefix = 7 if "url" in path.parts else None
 
-    # ── Stage 1: find p1 ─────────────────────────────────────────
-    p1 = find_single_fault(data, validator, path, set(), max_attempts, focus_prefix)
-    if p1 is None:
-        print("  [✗] no single-byte fault (p1) found")
+    result = find_contiguous_fault(data, validator, path, 3, max_attempts, focus_prefix)
+    if result is None:
+        print("  [✗] no failing contiguous three-byte span found")
         return
 
-    # ── Stage 2: find p2 ─────────────────────────────────────────
-    p2 = find_single_fault(data, validator, path, {p1}, max_attempts, focus_prefix)
-    if p2 is None:
-        print("  [✗] no second single-byte fault (p2) found")
-        return
-
-    # ── Stage 3: find p3 ─────────────────────────────────────────
-    p3 = find_single_fault(data, validator, path, {p1, p2}, max_attempts, focus_prefix)
-    if p3 is None:
-        print("  [✗] no third single-byte fault (p3) found")
-        return
-
-    # ── Stage 4: confirm triple mutation ─────────────────────────
-    mutated_triple = mutate_at_positions(bytearray(data), p1, p2, p3)
-    tmp_triple = path.with_suffix(".tmp_mut_triple")
-    tmp_triple.write_bytes(mutated_triple)
-    triple_fails = not run_validator(validator, tmp_triple)
-    tmp_triple.unlink(missing_ok=True)
-
-    if triple_fails:
-        store_triple(
-            conn,
-            str(path),
-            (p1, p2, p3),
-            data.decode(errors="ignore"),
-            mutated_triple.decode(errors="ignore"),
-        )
-        print(f"  [✓] found triple ({p1},{p2},{p3}) – single faults & triple fault")
-    else:
-        print("  [✗] p1, p2, p3 individually fault but not together – skipped")
+    positions, mutated_triple = result
+    store_triple(
+        conn,
+        str(path),
+        (positions[0], positions[1], positions[2]),
+        data.decode(errors="ignore"),
+        mutated_triple.decode(errors="ignore"),
+    )
+    print(f"  [✓] found contiguous triple ({positions[0]},{positions[1]},{positions[2]})")
 
 
 def traverse(
@@ -224,14 +204,14 @@ def traverse(
 # ───────────────────────────────── main ─────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(
-        description="Three-byte mutate & store: find p1 then p2 then p3"
+        description="Three-byte contiguous mutate & store"
     )
     ap.add_argument("--folder", required=True)
     ap.add_argument("--validator", required=True)
     ap.add_argument("--database", required=True)
     ap.add_argument(
         "--max-attempts", type=int, default=100,
-        help="max single-mutation attempts to find p1, p2, p3"
+        help="max contiguous-span attempts per file"
     )
     ap.add_argument("--seed", type=int)
     args = ap.parse_args()

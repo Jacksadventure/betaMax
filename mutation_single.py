@@ -3,8 +3,8 @@
 mutate_and_store.py
 -------------------
 Traverse a folder, try up to `--max-attempts` single-byte mutations per file,
-and store up to 10 (original, mutated) pairs that turn a previously-valid file
-into an invalid one (validator exit-code ≠ 0).
+and store the first (original, mutated) pair that turns a previously-valid file
+into an invalid one (validator exit-code != 0).
 
 Mutation strategy
 -----------------
@@ -240,8 +240,8 @@ def main() -> None:
     parser.add_argument("--database", required=True, help="SQLite output file")
     parser.add_argument("--max-attempts", type=int, default=10_00,
                         help="max mutation attempts per file (default: 1000)")
-    parser.add_argument("--max-per-file", type=int, default=10,
-                        help="max invalid mutations to store per original file (default: 10)")
+    parser.add_argument("--max-per-file", type=int, default=1,
+                        help="max invalid mutations to store per original file (default: 1)")
     parser.add_argument("--seed", type=int, help="optional RNG seed for reproducibility")
     args = parser.parse_args()
 
