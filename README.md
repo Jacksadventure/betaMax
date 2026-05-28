@@ -9,8 +9,8 @@ This repository snapshot is organized around the **C++ betaMax backend** in [bet
 The easiest path after cloning is:
 
 1. Build the Docker image from [Dockerfile](./Dockerfile).
-2. Run the container with a mounted result directory.
-3. Let the image run the full regex benchmark suite by default.
+2. Run a small `date` smoke test with a mounted result directory.
+3. Run the full regex benchmark suite after the smoke test succeeds.
 
 What works cleanly in this checkout:
 
@@ -32,16 +32,28 @@ Build the image:
 docker build -t betamax:latest .
 ```
 
-Run the full regex benchmark suite and keep the output databases on the host:
+Run a small `date` smoke test first and keep the output database on the host:
 
 ```bash
 mkdir -p docker-results
 docker run --rm \
   -v "$PWD/docker-results:/results" \
-  betamax:latest
+  betamax:latest quick --formats date --db /results/smoke_date.db
 ```
 
-By default, the container runs:
+This should write:
+
+- `docker-results/smoke_date.db`
+
+After the smoke test succeeds, run the full regex benchmark suite:
+
+```bash
+docker run --rm \
+  -v "$PWD/docker-results:/results" \
+  betamax:latest regex
+```
+
+The full suite runs:
 
 ```bash
 ./run_bms.sh regex
@@ -53,7 +65,7 @@ and writes:
 - `docker-results/betamax_double.db`
 - `docker-results/betamax_triple.db`
 
-To run a smaller smoke test instead:
+To run the default smoke test directly:
 
 ```bash
 docker run --rm \
