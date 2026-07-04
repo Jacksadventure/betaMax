@@ -6,7 +6,7 @@
 
 ## Link
 
-The accepted-paper PDF is included with this artifact as [ASE_beta_max_repairer.pdf](ASE_beta_max_repairer.pdf).
+The accepted-paper PDF is included with this artifact as [ase2026-betamax.pdf](ase2026-betamax.pdf).
 
 Accepted paper URL: **TODO: add the reviewer-accessible accepted-paper URL before submission.**
 
